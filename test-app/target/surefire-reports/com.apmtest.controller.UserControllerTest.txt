@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.apmtest.controller.UserControllerTest
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.046 s -- in com.apmtest.controller.UserControllerTest
