@@ -1,6 +1,10 @@
 package com.agent;
 
+import com.agent.instrumentation.ControllerMethodAdvice;
 import java.lang.instrument.Instrumentation;
+import net.bytebuddy.agent.builder.AgentBuilder;
+import net.bytebuddy.asm.Advice;
+import net.bytebuddy.matcher.ElementMatchers;
 
 /**
  * 가장 간단한 Java Agent 예제
@@ -20,7 +24,7 @@ public class SimpleAgent {
      */
     public static void premain(String agentArgs, Instrumentation inst) {
         System.out.println("🎉 ========================================");
-        System.out.println("🎉 Simple Agent가 시작되었습니다!");
+        System.out.println("🎉 Javi Agent가 시작되었습니다!");
         System.out.println("🎉 ========================================");
         
         if (agentArgs != null && !agentArgs.isEmpty()) {
@@ -29,8 +33,19 @@ public class SimpleAgent {
         
         System.out.println("🔧 JVM 버전: " + System.getProperty("java.version"));
         System.out.println("🔧 JVM 벤더: " + System.getProperty("java.vendor"));
-        
-        // 클래스 변환기 등록 (나중에 추가할 기능)
+
+        new AgentBuilder.Default()
+                .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                .type(ElementMatchers.nameContains("UserController"))
+                .transform(
+                        (builder, type, classLoader, module, protectionDomain) ->
+                                builder.visit(
+                                        Advice.to(ControllerMethodAdvice.class)
+                                                .on(ElementMatchers.isMethod()
+                                                        .and(ElementMatchers.isPublic()))))
+                .installOn(inst);
+
+        System.out.println("✅ Controller 자동 계측이 등록되었습니다!");
         System.out.println("✅ Agent 설정이 완료되었습니다!");
         System.out.println("✅ 이제 애플리케이션이 시작됩니다...");
         System.out.println();
