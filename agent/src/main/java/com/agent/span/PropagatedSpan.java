@@ -96,4 +96,9 @@ final class PropagatedSpan implements Span {
     public <T> Span setAttribute(AttributeKey<T> key, T value) {
         return this;
     }
+
+    @Override
+    public Span updateName(String name) {
+        return this;
+    }
 }

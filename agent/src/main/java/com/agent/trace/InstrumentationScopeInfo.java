@@ -25,4 +25,19 @@ public final class InstrumentationScopeInfo {
     public String getSchemaUrl() {
         return schemaUrl;
     }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof InstrumentationScopeInfo)) return false;
+        InstrumentationScopeInfo that = (InstrumentationScopeInfo) o;
+        return java.util.Objects.equals(name, that.name)
+                && java.util.Objects.equals(version, that.version)
+                && java.util.Objects.equals(schemaUrl, that.schemaUrl);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(name, version, schemaUrl);
+    }
 }

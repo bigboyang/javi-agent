@@ -1,7 +1,9 @@
 package com.agent;
 
+import com.agent.instrumentation.AgentRuntime;
 import com.agent.instrumentation.ControllerMethodAdvice;
 import java.lang.instrument.Instrumentation;
+import java.util.concurrent.TimeUnit;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.matcher.ElementMatchers;
@@ -49,6 +51,17 @@ public class SimpleAgent {
         System.out.println("✅ Agent 설정이 완료되었습니다!");
         System.out.println("✅ 이제 애플리케이션이 시작됩니다...");
         System.out.println();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("[javi-agent] Shutdown: 남은 span flush 중...");
+            try {
+                AgentRuntime.provider().forceFlush().join(5, TimeUnit.SECONDS);
+                AgentRuntime.provider().shutdown().join(3, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                System.err.println("[javi-agent] Shutdown 중 오류: " + e.getMessage());
+            }
+            System.out.println("[javi-agent] Shutdown 완료.");
+        }, "javi-agent-shutdown"));
     }
     
     /**

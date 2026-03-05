@@ -91,6 +91,11 @@ public final class BatchSpanProcessor implements SpanProcessor {
                         try {
                             exportAll();
                             worker.shutdown();
+                            try {
+                                worker.awaitTermination(5, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
                             result.succeed();
                         } catch (RuntimeException ex) {
                             LOGGER.log(Level.FINE, "shutdown failed", ex);

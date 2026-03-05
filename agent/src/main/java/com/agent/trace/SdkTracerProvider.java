@@ -3,6 +3,7 @@ package com.agent.trace;
 import com.agent.common.utils.generator.IdGenerator;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.common.utils.time.Clock;
+import com.agent.sampler.Sampler;
 import com.agent.span.SpanLimits;
 import com.agent.trace.processor.NoopSpanProcessor;
 import com.agent.trace.processor.BatchSpanProcessor;
@@ -13,6 +14,7 @@ import com.agent.trace.exporter.SpanExporter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 /**
@@ -22,6 +24,7 @@ public class SdkTracerProvider implements TracerProvider {
     private final TracerSharedState sharedState;
     private volatile TracerConfig tracerConfig;
     private final List<SpanProcessor> spanProcessors = new ArrayList<>();
+    private final ConcurrentHashMap<InstrumentationScopeInfo, SdkTracer> tracerCache = new ConcurrentHashMap<>();
 
     public SdkTracerProvider(IdGenerator idGenerator) {
         this(Clock.system(), idGenerator, TracerConfig.defaultConfig(), NoopSpanProcessor.getInstance());
@@ -126,8 +129,13 @@ public class SdkTracerProvider implements TracerProvider {
     }
 
 
+    public void setSampler(Sampler sampler) {
+        sharedState.setSampler(sampler);
+    }
+
     public void setTracerConfig(TracerConfig tracerConfig) {
         this.tracerConfig = tracerConfig;
+        tracerCache.clear();
     }
 
     @Override
@@ -136,7 +144,7 @@ public class SdkTracerProvider implements TracerProvider {
             return NoopTracer.INSTANCE;
         }
         InstrumentationScopeInfo info = new InstrumentationScopeInfo(instrumentationName, null, null);
-        return new SdkTracer(sharedState, info, tracerConfig);
+        return tracerCache.computeIfAbsent(info, k -> new SdkTracer(sharedState, k, tracerConfig));
     }
 
     @Override

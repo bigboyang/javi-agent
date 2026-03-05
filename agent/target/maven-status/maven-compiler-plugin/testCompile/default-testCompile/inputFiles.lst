@@ -1,1 +1,6 @@
+/Users/kkc/APM/agent/src/test/java/com/agent/span/AttributeKeyTest.java
+/Users/kkc/APM/agent/src/test/java/com/agent/sampler/SamplerTest.java
 /Users/kkc/APM/agent/src/test/java/com/agent/TestApp.java
+/Users/kkc/APM/agent/src/test/java/com/agent/trace/SdkTracerProviderTest.java
+/Users/kkc/APM/agent/src/test/java/com/agent/trace/processor/BatchSpanProcessorTest.java
+/Users/kkc/APM/agent/src/test/java/com/agent/span/SdkSpanTest.java

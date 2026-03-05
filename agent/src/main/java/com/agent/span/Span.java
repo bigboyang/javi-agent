@@ -29,6 +29,10 @@ public interface Span {
 
     String getName();
 
+    Span updateName(String name);
+
+    default boolean isRecording() { return false; }
+
     SpanContext getContext();
 
     long getStartTimeNanos();
@@ -45,6 +49,8 @@ public interface Span {
 
     Span setAttribute(String key, boolean value);
 
+    <T> Span setAttribute(AttributeKey<T> key, T value);
+
     Span addEvent(String name);
 
     Span addEvent(String name, java.util.Map<AttributeKey<?>, Object> attributes);
@@ -52,6 +58,4 @@ public interface Span {
     Span recordException(Throwable exception);
 
     Span setStatus(SpanStatus status, String description);
-
-    <T> Span setAttribute(AttributeKey<T> key, T value);
 }

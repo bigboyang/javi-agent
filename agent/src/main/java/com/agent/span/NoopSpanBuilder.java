@@ -41,6 +41,21 @@ public final class NoopSpanBuilder implements SpanBuilder {
     }
 
     @Override
+    public SpanBuilder setAttribute(String key, String value) { return this; }
+
+    @Override
+    public SpanBuilder setAttribute(String key, long value) { return this; }
+
+    @Override
+    public SpanBuilder setAttribute(String key, double value) { return this; }
+
+    @Override
+    public SpanBuilder setAttribute(String key, boolean value) { return this; }
+
+    @Override
+    public <T> SpanBuilder setAttribute(AttributeKey<T> key, T value) { return this; }
+
+    @Override
     public Span startSpan() {
         return Span.invalid();
     }
