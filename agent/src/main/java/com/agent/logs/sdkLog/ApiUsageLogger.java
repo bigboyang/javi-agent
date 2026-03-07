@@ -1,7 +1,7 @@
 package com.agent.logs.sdkLog;
 
+import com.agent.logs.AgentLogger;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /**
  * Helper for API misuse logging.
@@ -13,25 +13,16 @@ import java.util.logging.Logger;
  */
 public final class ApiUsageLogger {
 
-  private static final Logger API_USAGE_LOGGER = Logger.getLogger(ApiUsageLogger.class.getName());
-
-  /**
-   * Log the {@code message} to the {@link #API_USAGE_LOGGER API Usage Logger}.
-   *
-   * <p>Log at {@link Level#FINEST} and include a stack trace.
-   */
+  /** Log at WARN level (API misuse is always noteworthy). */
   public static void log(String message) {
-    log(message, Level.FINEST);
+    AgentLogger.warn("[API-MISUSE] " + message);
   }
 
-  /**
-   * Log the {@code message} to the {@link #API_USAGE_LOGGER API Usage Logger}.
-   *
-   * <p>Log includes a stack trace.
-   */
   public static void log(String message, Level level) {
-    if (API_USAGE_LOGGER.isLoggable(level)) {
-      API_USAGE_LOGGER.log(level, message, new AssertionError());
+    if (level.intValue() >= Level.WARNING.intValue()) {
+      AgentLogger.warn("[API-MISUSE] " + message);
+    } else {
+      AgentLogger.debug("[API-MISUSE] " + message);
     }
   }
 

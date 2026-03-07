@@ -1,6 +1,7 @@
 package com.agent.trace.processor;
 
 import com.agent.common.utils.concurrent.CompletableResultCode;
+import com.agent.logs.AgentLogger;
 import com.agent.span.Span;
 import com.agent.trace.exporter.SpanExporter;
 import java.util.ArrayList;
@@ -12,12 +13,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 /** Buffers spans and exports them in batches on a schedule. */
 public final class BatchSpanProcessor implements SpanProcessor {
-    private static final Logger LOGGER = Logger.getLogger(BatchSpanProcessor.class.getName());
 
     private final SpanExporter exporter;
     private final BlockingQueue<Span> queue;
@@ -50,7 +48,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
             return;
         }
         if (!queue.offer(span)) {
-            LOGGER.log(Level.FINE, "batch span processor drop: queue full");
+            AgentLogger.warn("BatchSpanProcessor: queue full, span dropped. Consider increasing maxQueueSize.");
         }
     }
 
@@ -68,7 +66,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
                             exportAll();
                             result.succeed();
                         } catch (RuntimeException ex) {
-                            LOGGER.log(Level.FINE, "forceFlush failed", ex);
+                            AgentLogger.error("BatchSpanProcessor: forceFlush failed: " + ex.getMessage(), ex);
                             result.fail();
                         }
                     });
@@ -98,7 +96,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
                             }
                             result.succeed();
                         } catch (RuntimeException ex) {
-                            LOGGER.log(Level.FINE, "shutdown failed", ex);
+                            AgentLogger.error("BatchSpanProcessor: shutdown failed: " + ex.getMessage(), ex);
                             result.fail();
                         }
                     });
@@ -112,7 +110,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
         try {
             exportBatch();
         } catch (RuntimeException ex) {
-            LOGGER.log(Level.FINE, "batch export failed", ex);
+            AgentLogger.warn("BatchSpanProcessor: batch export failed: " + ex.getMessage());
         }
     }
 

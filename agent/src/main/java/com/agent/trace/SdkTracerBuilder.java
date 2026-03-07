@@ -28,11 +28,11 @@ public class SdkTracerBuilder implements TracerBuilder {
 
     @Override
     public Tracer build() {
-        if (!provider.getTracerConfig().isEnabled()) {
+        if (!provider.getTracerConfig().isEnabled() || provider.isShutdown()) {
             return NoopTracer.INSTANCE;
         }
         InstrumentationScopeInfo info =
                 new InstrumentationScopeInfo(instrumentationName, instrumentationVersion, schemaUrl);
-        return new SdkTracer(provider.getSharedState(), info, provider.getTracerConfig());
+        return provider.getOrCreateTracer(info);
     }
 }

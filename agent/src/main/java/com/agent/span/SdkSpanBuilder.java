@@ -4,6 +4,7 @@ import com.agent.common.utils.generator.IdGenerator;
 import com.agent.common.utils.time.AnchoredClock;
 import com.agent.common.utils.time.Clock;
 import com.agent.sampler.SamplingDecision;
+import com.agent.trace.InstrumentationScopeInfo;
 import com.agent.trace.TracerSharedState;
 
 import java.util.ArrayList;
@@ -17,6 +18,7 @@ import java.util.Map;
 public final class SdkSpanBuilder implements SpanBuilder {
     private final String name;
     private final TracerSharedState sharedState;
+    private final InstrumentationScopeInfo instrumentationScopeInfo;
     private final boolean tracerEnabled;
     private SpanContext parent;
     private final List<SpanLink> links = new ArrayList<>();
@@ -25,9 +27,14 @@ public final class SdkSpanBuilder implements SpanBuilder {
     private final Clock clock;
     private final Map<AttributeKey<?>, Object> startAttributes = new LinkedHashMap<>();
 
-    public SdkSpanBuilder(String name, TracerSharedState sharedState, boolean tracerEnabled) {
+    public SdkSpanBuilder(
+            String name,
+            TracerSharedState sharedState,
+            InstrumentationScopeInfo instrumentationScopeInfo,
+            boolean tracerEnabled) {
         this.name = name;
         this.sharedState = sharedState;
+        this.instrumentationScopeInfo = instrumentationScopeInfo;
         this.tracerEnabled = tracerEnabled;
         this.parent = Context.currentSpan().getContext();
         this.clock = sharedState.getClock();
@@ -131,6 +138,7 @@ public final class SdkSpanBuilder implements SpanBuilder {
         SdkSpan span = new SdkSpan(
                 name,
                 context,
+                instrumentationScopeInfo,
                 start,
                 links,
                 sharedState.getSpanLimits(),

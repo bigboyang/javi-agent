@@ -1,5 +1,7 @@
 package com.agent.span;
 
+import com.agent.trace.InstrumentationScopeInfo;
+
 import java.util.List;
 import java.util.Map;
 
@@ -8,6 +10,9 @@ import java.util.Map;
  * Exporter가 Span 데이터를 직렬화할 때 사용한다.
  */
 public interface ReadableSpan {
+    /** 이 스팬을 생성한 계측 스코프 정보. OTLP export 시 ResourceSpans 그룹핑에 사용된다. */
+    InstrumentationScopeInfo getInstrumentationScopeInfo();
+
     String getName();
     SpanContext getContext();
     SpanKind getKind();

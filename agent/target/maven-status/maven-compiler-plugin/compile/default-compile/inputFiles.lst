@@ -3,18 +3,21 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/span/NoopSpan.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/CompositeSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/SimpleSpanProcessor.java
+/Users/kkc/APM/agent/src/main/java/com/agent/trace/SdkTracerProviderBuilder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/LoggingSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/SystemClock.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/MultiTextMapPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/SamplingDecision.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/OtlpHttpSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/concurrent/CompletableResultCode.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcStatementAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/AgentRuntime.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanEvent.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/MapTextMapSetter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/TextMapPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/ParentBasedSampler.java
+/Users/kkc/APM/agent/src/main/java/com/agent/logs/AgentLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerSharedState.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/BatchSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/ContextPropagators.java
@@ -30,6 +33,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanBuilder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/InstrumentationScopeInfo.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/AlwaysOnSampler.java
+/Users/kkc/APM/agent/src/main/java/com/agent/trace/NoopTracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/Propagation.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/Tracer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/Sampler.java
@@ -48,6 +52,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/ControllerMethodAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/SimpleAgent.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/encode/EncodingUtils.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/HttpClientAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/generator/RandomIdGenerator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/SdkTracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/TraceIdRatioBasedSampler.java
@@ -71,3 +76,5 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/span/Span.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/TextMapSetter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/Clock.java
+/Users/kkc/APM/agent/src/main/java/com/agent/trace/NoopTracerBuilder.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcPreparedStatementAdvice.java

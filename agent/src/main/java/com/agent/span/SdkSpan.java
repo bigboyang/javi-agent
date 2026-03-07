@@ -2,6 +2,7 @@ package com.agent.span;
 
 import com.agent.common.utils.time.AnchoredClock;
 import com.agent.common.utils.time.Clock;
+import com.agent.trace.InstrumentationScopeInfo;
 import com.agent.trace.processor.SpanProcessor;
 
 import java.io.PrintWriter;
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class SdkSpan implements Span, ReadableSpan {
     private volatile String name;
     private final SpanContext context;
+    private final InstrumentationScopeInfo instrumentationScopeInfo;
     private final long startTimeNanos;
     private final List<SpanLink> links;
     private final SpanLimits spanLimits;
@@ -50,6 +52,7 @@ final class SdkSpan implements Span, ReadableSpan {
     SdkSpan(
             String name,
             SpanContext context,
+            InstrumentationScopeInfo instrumentationScopeInfo,
             long startTimeNanos,
             List<SpanLink> links,
             SpanLimits spanLimits,
@@ -60,6 +63,7 @@ final class SdkSpan implements Span, ReadableSpan {
             long startNanoTime) {
         this.name = name;
         this.context = context;
+        this.instrumentationScopeInfo = instrumentationScopeInfo;
         this.startTimeNanos = startTimeNanos;
         this.links = links == null ? Collections.emptyList() : new ArrayList<>(links);
         this.spanLimits = spanLimits;
@@ -212,6 +216,11 @@ final class SdkSpan implements Span, ReadableSpan {
     }
 
     // ---- ReadableSpan ----
+
+    @Override
+    public InstrumentationScopeInfo getInstrumentationScopeInfo() {
+        return instrumentationScopeInfo;
+    }
 
     @Override
     public Map<AttributeKey<?>, Object> getAttributes() {

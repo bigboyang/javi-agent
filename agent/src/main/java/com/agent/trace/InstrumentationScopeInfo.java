@@ -40,4 +40,12 @@ public final class InstrumentationScopeInfo {
     public int hashCode() {
         return java.util.Objects.hash(name, version, schemaUrl);
     }
+
+    @Override
+    public String toString() {
+        StringBuilder sb = new StringBuilder("InstrumentationScopeInfo{name=").append(name);
+        if (version != null) sb.append(", version=").append(version);
+        if (schemaUrl != null) sb.append(", schemaUrl=").append(schemaUrl);
+        return sb.append('}').toString();
+    }
 }

@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
 import com.agent.span.SpanKind;
@@ -20,16 +21,42 @@ public final class ControllerMethodAdvice {
             @Advice.Origin("#t") String typeName,
             @Advice.Origin("#m") String methodName) {
 
-        String spanName = resolveSpanName(typeName, methodName);
+        // span name: Spring RequestContextHolder로 HTTP 정보 추출, fallback은 ClassName#method
+        String spanName;
+        String httpMethod = null;
+        String uri = null;
+        try {
+            Class<?> rch = Class.forName(
+                    "org.springframework.web.context.request.RequestContextHolder");
+            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
+            if (attrs != null) {
+                Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
+                httpMethod = (String) req.getClass().getMethod("getMethod").invoke(req);
+                uri = (String) req.getClass().getMethod("getRequestURI").invoke(req);
+                spanName = httpMethod + " " + uri;
+            } else {
+                int dot = typeName.lastIndexOf('.');
+                spanName = (dot >= 0 ? typeName.substring(dot + 1) : typeName) + "#" + methodName;
+            }
+        } catch (Throwable ignored) {
+            int dot = typeName.lastIndexOf('.');
+            spanName = (dot >= 0 ? typeName.substring(dot + 1) : typeName) + "#" + methodName;
+        }
+
         Tracer tracer = AgentRuntime.tracer();
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.SERVER)
                 .startSpan();
 
-        // HTTP 속성 추가 (OTel HTTP 시맨틱 컨벤션)
-        addHttpAttributes(span);
+        if (httpMethod != null) {
+            span.setAttribute("http.method", httpMethod);
+        }
+        if (uri != null) {
+            span.setAttribute("http.target", uri);
+        }
 
         Scope scope = span.makeCurrent();
+        AgentLogger.debug("[HTTP] span started: " + spanName);
         return new State(span, scope);
     }
 
@@ -41,54 +68,10 @@ public final class ControllerMethodAdvice {
         if (error != null) {
             state.span.recordException(error);
             state.span.setStatus(com.agent.span.SpanStatus.ERROR, error.getMessage());
+            AgentLogger.debug("[HTTP] span error: " + error.getMessage());
         }
         state.scope.close();
         state.span.end();
-    }
-
-    /**
-     * Spring RequestContextHolder를 reflection으로 접근해 "METHOD /uri" 형식으로 반환.
-     * Spring이 없거나 request context가 없으면 "SimpleClassName#methodName" 반환.
-     */
-    private static String resolveSpanName(String typeName, String methodName) {
-        try {
-            Class<?> rch = Class.forName(
-                    "org.springframework.web.context.request.RequestContextHolder");
-            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
-            if (attrs != null) {
-                Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
-                String httpMethod = (String) req.getClass().getMethod("getMethod").invoke(req);
-                String uri = (String) req.getClass().getMethod("getRequestURI").invoke(req);
-                return httpMethod + " " + uri;
-            }
-        } catch (Throwable ignored) {
-            // Spring 없음 or request context 없음 → fallback
-        }
-        int dot = typeName.lastIndexOf('.');
-        String simpleName = dot >= 0 ? typeName.substring(dot + 1) : typeName;
-        return simpleName + "#" + methodName;
-    }
-
-    /**
-     * 현재 HTTP 요청 정보를 스팬 속성으로 추가 (OTel semantic conventions).
-     */
-    private static void addHttpAttributes(Span span) {
-        try {
-            Class<?> rch = Class.forName(
-                    "org.springframework.web.context.request.RequestContextHolder");
-            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
-            if (attrs != null) {
-                Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
-                String method = (String) req.getClass().getMethod("getMethod").invoke(req);
-                String uri = (String) req.getClass().getMethod("getRequestURI").invoke(req);
-                span.setAttribute("http.method", method);
-                span.setAttribute("http.target", uri);
-                Object queryString = req.getClass().getMethod("getQueryString").invoke(req);
-                if (queryString != null) {
-                    span.setAttribute("http.url", uri + "?" + queryString);
-                }
-            }
-        } catch (Throwable ignored) {}
     }
 
     static final class State {

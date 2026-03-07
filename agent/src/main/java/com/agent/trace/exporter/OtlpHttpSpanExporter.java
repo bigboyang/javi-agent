@@ -1,6 +1,7 @@
 package com.agent.trace.exporter;
 
 import com.agent.common.utils.concurrent.CompletableResultCode;
+import com.agent.logs.AgentLogger;
 import com.agent.span.AttributeKey;
 import com.agent.span.ReadableSpan;
 import com.agent.span.Span;
@@ -70,17 +71,18 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
                 HttpResponse<Void> response = httpClient.send(request, HttpResponse.BodyHandlers.discarding());
                 int status = response.statusCode();
                 if (status >= 200 && status < 300) {
+                    AgentLogger.debug("OTLP export success spans=" + spans.size() + " status=" + status);
                     return CompletableResultCode.ofSuccess();
                 }
                 // 4xx는 재시도 없음
                 if (status >= 400 && status < 500) {
-                    System.err.println("[javi-agent] OTLP export rejected status=" + status);
+                    AgentLogger.warn("OTLP export rejected status=" + status + " endpoint=" + endpoint);
                     return CompletableResultCode.ofFailure();
                 }
                 // 5xx는 재시도
-                System.err.println("[javi-agent] OTLP export failed status=" + status + ", attempt=" + (attempt + 1));
+                AgentLogger.warn("OTLP export failed status=" + status + " attempt=" + (attempt + 1) + "/" + MAX_RETRIES);
             } catch (Exception e) {
-                System.err.println("[javi-agent] OTLP export error attempt=" + (attempt + 1) + ": " + e.getMessage());
+                AgentLogger.warn("OTLP export error attempt=" + (attempt + 1) + "/" + MAX_RETRIES + ": " + e.getMessage());
             }
         }
         return CompletableResultCode.ofFailure();

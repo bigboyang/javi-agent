@@ -1,6 +1,7 @@
 package com.agent.trace.exporter;
 
 import com.agent.common.utils.concurrent.CompletableResultCode;
+import com.agent.logs.AgentLogger;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
 import java.util.Collection;
@@ -17,7 +18,7 @@ public final class LoggingSpanExporter implements SpanExporter {
                 continue;
             }
             SpanContext context = span.getContext();
-            System.out.println(
+            AgentLogger.debug(
                     "[agent] export span name=" + span.getName()
                             + " traceId=" + (context == null ? "unknown" : context.getTraceId())
                             + " spanId=" + (context == null ? "unknown" : context.getSpanId())

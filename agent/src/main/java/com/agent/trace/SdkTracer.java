@@ -31,7 +31,7 @@ public class SdkTracer implements Tracer {
         if (name == null || name.trim().isEmpty()) {
             name = FALLBACK_SPAN_NAME;
         }
-        return new SdkSpanBuilder(name, sharedState, true);
+        return new SdkSpanBuilder(name, sharedState, instrumentationScopeInfo, true);
     }
 
     public String getInstrumentationName() {

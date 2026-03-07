@@ -9,5 +9,10 @@ rm -rf target
 mvn clean package
 
 # 3) 애플리케이션 실행 (agent 붙이기)
+# java -javaagent:/Users/kkc/APM/agent/target/javi-1.0.0.jar \
+#   -jar /Users/kkc/APM/test-app/target/test-0.0.1-SNAPSHOT.jar
+
 java -javaagent:/Users/kkc/APM/agent/target/javi-1.0.0.jar \
+  -Djavi.log.file=/Users/kkc/APM/javi/logs/javi-agent.log \
+  -Djavi.log.level=FINE \
   -jar /Users/kkc/APM/test-app/target/test-0.0.1-SNAPSHOT.jar

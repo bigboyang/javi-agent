@@ -2,6 +2,7 @@ package com.agent.span;
 
 import com.agent.common.utils.time.AnchoredClock;
 import com.agent.common.utils.time.Clock;
+import com.agent.trace.InstrumentationScopeInfo;
 import com.agent.trace.processor.NoopSpanProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,9 +26,11 @@ class SdkSpanTest {
                 "b7ad6b7169203331",
                 SpanId.getInvalid(),
                 true);
+        InstrumentationScopeInfo scopeInfo = new InstrumentationScopeInfo("test", null, null);
         span = new SdkSpan(
                 "test-span",
                 ctx,
+                scopeInfo,
                 anchoredClock.now(),
                 Collections.emptyList(),
                 new SpanLimits(3, 3, 3),

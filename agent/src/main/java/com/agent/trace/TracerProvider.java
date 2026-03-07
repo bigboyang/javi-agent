@@ -1,5 +1,7 @@
 package com.agent.trace;
 
+import com.agent.common.utils.concurrent.CompletableResultCode;
+
 /**
  * Tracer를 제공하는 프로바이더 인터페이스.
  */
@@ -8,6 +10,20 @@ public interface TracerProvider {
     TracerBuilder tracerBuilder(String instrumentationName);
 
     default Tracer getTracer(String instrumentationName, String instrumentationVersion) {
-        return getTracer(instrumentationName);
+        return tracerBuilder(instrumentationName)
+                .setInstrumentationVersion(instrumentationVersion)
+                .build();
+    }
+
+    default CompletableResultCode shutdown() {
+        return CompletableResultCode.ofSuccess();
+    }
+
+    default CompletableResultCode forceFlush() {
+        return CompletableResultCode.ofSuccess();
+    }
+
+    static TracerProvider noop() {
+        return NoopTracerProvider.INSTANCE;
     }
 }
