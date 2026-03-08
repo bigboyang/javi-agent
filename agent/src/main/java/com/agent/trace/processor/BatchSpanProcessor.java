@@ -8,33 +8,54 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Buffers spans and exports them in batches on a schedule. */
+/** 
+ * Span 처리에 특화된 최적화된 Batch 프로세서.
+ * 중간 추상화 레이어(BatchDataProcessor)를 제거하여 성능을 최적화했습니다.
+ */
 public final class BatchSpanProcessor implements SpanProcessor {
 
-    private final SpanExporter exporter;
     private final BlockingQueue<Span> queue;
+    private final SpanExporter exporter;
     private final int maxBatchSize;
-    private final ScheduledExecutorService worker;
-    private final AtomicBoolean shutdown = new AtomicBoolean(false);
+    private final long exportIntervalMs;
+    private final Thread workerThread;
+    private final AtomicBoolean isShutdown = new AtomicBoolean(false);
+
+    // Tail Sampling 설정 캐싱
+    private final boolean tailSamplingEnabled;
+    private final long slowThresholdNanos;
+    private final java.util.Set<String> criticalUrls;
+
+    // 클러스터링 기반 샘플링을 위한 카운터 (Pattern -> Count)
+    private final int clusterMinSamples;
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> clusterCounters = new java.util.concurrent.ConcurrentHashMap<>();
 
     public BatchSpanProcessor(SpanExporter exporter, int maxQueueSize, int maxBatchSize, long delayMillis) {
-        if (exporter == null) {
-            throw new IllegalArgumentException("exporter");
-        }
-        if (maxQueueSize <= 0 || maxBatchSize <= 0 || maxBatchSize > maxQueueSize) {
-            throw new IllegalArgumentException("invalid batch settings");
-        }
         this.exporter = exporter;
-        this.queue = new ArrayBlockingQueue<>(maxQueueSize);
         this.maxBatchSize = maxBatchSize;
-        this.worker = Executors.newSingleThreadScheduledExecutor(new DaemonThreadFactory());
-        this.worker.scheduleAtFixedRate(this::exportBatchSafely, delayMillis, delayMillis, TimeUnit.MILLISECONDS);
+        this.exportIntervalMs = delayMillis;
+        this.queue = new ArrayBlockingQueue<>(maxQueueSize);
+
+        com.agent.config.AgentConfig config = com.agent.config.AgentConfig.load();
+        this.tailSamplingEnabled = config.isTailSamplingEnabled();
+        this.slowThresholdNanos = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(config.getSlowThresholdMs());
+        this.criticalUrls = new java.util.HashSet<>(config.getCriticalUrls());
+        this.clusterMinSamples = config.getClusterMinSamples();
+
+        // 1분마다 클러스터 카운터 초기화 스케줄링 (주기적인 대표 샘플 확보용)
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "javi-sampler-reset");
+            t.setDaemon(true);
+            return t;
+        }).scheduleAtFixedRate(clusterCounters::clear, 1, 1, java.util.concurrent.TimeUnit.MINUTES);
+
+        this.workerThread = new Thread(new Worker(), "javi-span-processor");
+        this.workerThread.setDaemon(true);
+        this.workerThread.start();
+        AgentLogger.info("[BatchSpanProcessor] 시작 (Queue:" + maxQueueSize + ", TailSampling:" + tailSamplingEnabled + ", ClusterMinSamples:" + clusterMinSamples + ")");
     }
 
     @Override
@@ -44,103 +65,133 @@ public final class BatchSpanProcessor implements SpanProcessor {
 
     @Override
     public void onEnd(Span span) {
-        if (span == null || shutdown.get()) {
+        if (span == null || isShutdown.get()) {
             return;
         }
+
+        boolean originallySampled = span.getContext().getTraceFlags().isSampled();
+
+        // 1. Head Sampling에 의해 이미 선택된 경우 (가장 빈번한 경로)
+        if (originallySampled) {
+            offerToQueue(span);
+            return;
+        }
+
+        // 2. Tail Sampling 로직 (누락된 트레이스 중 가치 있는 것 구조)
+        if (tailSamplingEnabled && isHighValueSpan(span)) {
+            AgentLogger.debug("[TailSampling] Rescued span: " + span.getName() + " (traceId=" + span.getContext().getTraceId() + ")");
+            offerToQueue(span);
+        }
+    }
+
+    private boolean isHighValueSpan(com.agent.span.Span span) {
+        if (!(span instanceof com.agent.span.ReadableSpan)) {
+            return false;
+        }
+        com.agent.span.ReadableSpan readableSpan = (com.agent.span.ReadableSpan) span;
+
+        // 1. 에러 기반 (Error-based)
+        if (readableSpan.getStatus() == com.agent.span.SpanStatus.ERROR) {
+            return true;
+        }
+
+        // 2. 대기시간 기반 (Latency-based)
+        if (slowThresholdNanos > 0) {
+            long duration = readableSpan.getEndTimeNanos() - readableSpan.getStartTimeNanos();
+            if (duration >= slowThresholdNanos) {
+                return true;
+            }
+        }
+
+        // 3. 검색/속성 기반 (Search/Attribute-based)
+        if (!criticalUrls.isEmpty()) {
+            String name = readableSpan.getName();
+            for (String url : criticalUrls) {
+                if (name.contains(url)) {
+                    return true;
+                }
+            }
+        }
+
+        // 4. 클러스터링 기반 (Clustering-based)
+        // 각 패턴(Operation Name)당 최소 clusterMinSamples 개수는 무조건 수집
+        if (clusterMinSamples > 0) {
+            String name = readableSpan.getName();
+            java.util.concurrent.atomic.AtomicLong counter = clusterCounters.computeIfAbsent(name, k -> new java.util.concurrent.atomic.AtomicLong(0));
+            if (counter.incrementAndGet() <= clusterMinSamples) {
+                return true; // 이 패턴의 대표 샘플로 선정
+            }
+        }
+
+        return false;
+    }
+
+    private void offerToQueue(Span span) {
         if (!queue.offer(span)) {
-            AgentLogger.warn("BatchSpanProcessor: queue full, span dropped. Consider increasing maxQueueSize.");
+            AgentLogger.debug("[BatchSpanProcessor] Queue full, dropping span.");
         }
     }
 
     @Override
     public CompletableResultCode forceFlush() {
-        CompletableResultCode result = new CompletableResultCode();
-        if (shutdown.get()) {
-            result.succeed();
-            return result;
-        }
-        try {
-            worker.execute(
-                    () -> {
-                        try {
-                            exportAll();
-                            result.succeed();
-                        } catch (RuntimeException ex) {
-                            AgentLogger.error("BatchSpanProcessor: forceFlush failed: " + ex.getMessage(), ex);
-                            result.fail();
-                        }
-                    });
-        } catch (RuntimeException ex) {
-            result.fail();
-        }
-        return result;
+        flush();
+        return CompletableResultCode.ofSuccess();
     }
 
     @Override
     public CompletableResultCode shutdown() {
-        CompletableResultCode result = new CompletableResultCode();
-        if (!shutdown.compareAndSet(false, true)) {
-            result.succeed();
-            return result;
+        if (!isShutdown.compareAndSet(false, true)) {
+            return CompletableResultCode.ofSuccess();
         }
+        workerThread.interrupt();
         try {
-            worker.execute(
-                    () -> {
-                        try {
-                            exportAll();
-                            worker.shutdown();
-                            try {
-                                worker.awaitTermination(5, TimeUnit.SECONDS);
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                            }
-                            result.succeed();
-                        } catch (RuntimeException ex) {
-                            AgentLogger.error("BatchSpanProcessor: shutdown failed: " + ex.getMessage(), ex);
-                            result.fail();
-                        }
-                    });
-        } catch (RuntimeException ex) {
-            result.fail();
+            // 종료 전 잔여 데이터 전송
+            flush();
+            workerThread.join(2000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        return result;
+        exporter.shutdown();
+        return CompletableResultCode.ofSuccess();
     }
 
-    private void exportBatchSafely() {
-        try {
-            exportBatch();
-        } catch (RuntimeException ex) {
-            AgentLogger.warn("BatchSpanProcessor: batch export failed: " + ex.getMessage());
-        }
-    }
-
-    private void exportBatch() {
+    /**
+     * 현재 큐에 쌓인 모든 스팬을 즉시 내보낸다.
+     */
+    private void flush() {
         List<Span> batch = new ArrayList<>(maxBatchSize);
-        queue.drainTo(batch, maxBatchSize);
-        if (batch.isEmpty()) {
-            return;
-        }
-        exporter.export(batch);
-    }
-
-    private void exportAll() {
-        List<Span> batch = new ArrayList<>(maxBatchSize);
-        while (true) {
-            queue.drainTo(batch, maxBatchSize);
-            if (batch.isEmpty()) {
+        while (queue.drainTo(batch, maxBatchSize) > 0) {
+            try {
+                exporter.export(new ArrayList<>(batch));
+                batch.clear();
+            } catch (Throwable t) {
+                AgentLogger.error("[BatchSpanProcessor] Flush error: " + t.getMessage());
                 break;
             }
-            exporter.export(batch);
-            batch.clear();
         }
     }
 
-    private static final class DaemonThreadFactory implements ThreadFactory {
+    private final class Worker implements Runnable {
         @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "batch-span-processor");
-            thread.setDaemon(true);
-            return thread;
+        public void run() {
+            List<Span> batch = new ArrayList<>(maxBatchSize);
+            while (!isShutdown.get()) {
+                try {
+                    Span firstItem = queue.poll(exportIntervalMs, TimeUnit.MILLISECONDS);
+                    if (firstItem != null) {
+                        batch.add(firstItem);
+                        queue.drainTo(batch, maxBatchSize - 1);
+                        
+                        exporter.export(new ArrayList<>(batch));
+                        batch.clear();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Throwable t) {
+                    AgentLogger.error("[BatchSpanProcessor] Worker error: " + t.getMessage());
+                }
+            }
         }
     }
 }

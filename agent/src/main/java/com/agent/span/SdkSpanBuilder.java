@@ -128,10 +128,12 @@ public final class SdkSpanBuilder implements SpanBuilder {
 
         SamplingDecision decision = sharedState.getSampler()
                 .shouldSample(parent, traceId, name, spanKind);
-        if (decision == SamplingDecision.DROP) {
-            return Span.invalid();
-        }
-        SpanContext context = SpanContext.create(traceId, spanId, parentSpanId, true);
+        
+        // Tail Sampling을 위해 DROP 되더라도 일단 SdkSpan 인스턴스는 생성합니다.
+        // 대신 SpanContext의 sampled 플래그를 decision에 따라 설정합니다.
+        boolean isSampled = (decision != SamplingDecision.DROP);
+        
+        SpanContext context = SpanContext.create(traceId, spanId, parentSpanId, isSampled);
         AnchoredClock anchoredClock = resolveAnchoredClock();
         long start = startTimestampNanos > 0 ? startTimestampNanos : anchoredClock.now();
         long startNanoTime = clock.nanoTime();

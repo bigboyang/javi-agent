@@ -72,4 +72,11 @@ public final class CompletableResultCode {
             return false;
         }
     }
+
+    /**
+     * 표준 CompletableFuture<Void>로 변환한다.
+     */
+    public CompletableFuture<Void> toCompletableFuture() {
+        return future.thenApply(success -> (Void) null);
+    }
 }

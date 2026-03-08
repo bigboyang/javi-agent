@@ -108,7 +108,7 @@ public final class AgentLogger {
         return defaultValue;
     }
 
-    /** 단순 텍스트 포맷터: [yyyy-MM-dd HH:mm:ss] [LEVEL] message */
+    /** 단순 텍스트 포맷터: [yyyy-MM-dd HH:mm:ss] [LEVEL] [traceId/spanId] message */
     private static final class AgentFormatter extends Formatter {
 
         @Override
@@ -121,9 +121,20 @@ public final class AgentLogger {
             String level = record.getLevel().getName();
             String message = formatMessage(record);
 
+            // 현재 스레드의 span context에서 traceId/spanId 추출
+            String traceContext = "";
+            try {
+                com.agent.span.SpanContext ctx =
+                        com.agent.span.Context.currentSpan().getContext();
+                if (ctx != null && ctx.isValid()) {
+                    traceContext = " [" + ctx.getTraceId() + "/" + ctx.getSpanId() + "]";
+                }
+            } catch (Throwable ignored) {}
+
             StringBuilder sb = new StringBuilder();
             sb.append('[').append(time).append(']')
               .append(" [").append(level).append(']')
+              .append(traceContext)
               .append(" ").append(message)
               .append(System.lineSeparator());
 

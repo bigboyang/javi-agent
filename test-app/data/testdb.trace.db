@@ -898,3 +898,12 @@ Caused by: org.h2.mvstore.MVStoreException: The file is locked: /Users/kkc/APM/t
 	... 66 more
 2026-03-07 15:29:19.542379+09:00 jdbc[3]: exception
 org.h2.jdbc.JdbcSQLNonTransientException: The object is already closed [90007-224]
+2026-03-08 13:47:53.224839+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-03-08 13:47:54.122865+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-03-08 13:47:54.738018+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]

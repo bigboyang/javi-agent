@@ -26,7 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 스팬 내용은 콘솔에 "[agent] export span ..." 형태로 출력된다.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-class AgentInstrumentationIT {
+class AgentInstrumentationTest {
 
     @LocalServerPort
     private int port;

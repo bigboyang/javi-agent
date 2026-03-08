@@ -19,3 +19,6 @@ build/
 
 .fake
 .claude
+.vscode
+
+javi/*/

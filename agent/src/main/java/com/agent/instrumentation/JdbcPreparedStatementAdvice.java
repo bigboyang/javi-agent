@@ -69,11 +69,11 @@ public final class JdbcPreparedStatementAdvice {
         state.span.end();
     }
 
-    static final class State {
-        final Span span;
-        final Scope scope;
+    public static final class State {
+        public final Span span;
+        public final Scope scope;
 
-        State(Span span, Scope scope) {
+        public State(Span span, Scope scope) {
             this.span = span;
             this.scope = scope;
         }
