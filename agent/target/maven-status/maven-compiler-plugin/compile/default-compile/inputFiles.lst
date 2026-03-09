@@ -67,6 +67,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/AgentLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/TraceLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerSharedState.java
+/Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfigHolder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/BatchSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/NoopTracer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricRegistry.java
@@ -85,6 +86,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TraceId.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/SdkLoggerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/ReadableSpan.java
+/Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfigPoller.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/CompositeSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/AnchoredClock.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/MetricLogger.java
@@ -98,9 +100,11 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/FileLogExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/NoopTextMapPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/SdkTracerBuilder.java
+/Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfig.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanLimits.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SdkSpan.java
+/Users/kkc/APM/agent/src/main/java/com/agent/config/AgentConfigServer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanKind.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanContext.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/Scope.java

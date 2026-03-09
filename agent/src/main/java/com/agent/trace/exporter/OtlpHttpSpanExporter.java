@@ -25,8 +25,7 @@ import java.util.concurrent.ThreadFactory;
  * 외부 의존성 없이 Java 11 HttpClient + 수동 JSON 직렬화 사용.
  */
 public final class OtlpHttpSpanExporter implements SpanExporter {
-    private static final int MAX_RETRIES = 3;
-    private static final long[] RETRY_DELAY_MS = {0L, 1000L, 5000L};
+    private static final long[] RETRY_DELAY_MS = {0L, 1000L, 5000L, 10000L, 30000L};
 
     private final URI endpoint;
     private final String serviceName;
@@ -52,7 +51,8 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
             return CompletableResultCode.ofSuccess();
         }
         String json = toJson(spans, serviceName);
-        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        int maxRetries = com.agent.config.RemoteConfigHolder.get().getRetryCount();
+        for (int attempt = 0; attempt < maxRetries; attempt++) {
             if (attempt > 0) {
                 try {
                     Thread.sleep(RETRY_DELAY_MS[attempt]);
@@ -80,9 +80,9 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
                     return CompletableResultCode.ofFailure();
                 }
                 // 5xx는 재시도
-                AgentLogger.warn("OTLP export failed status=" + status + " attempt=" + (attempt + 1) + "/" + MAX_RETRIES);
+                AgentLogger.warn("OTLP export failed status=" + status + " attempt=" + (attempt + 1) + "/" + maxRetries);
             } catch (Exception e) {
-                AgentLogger.warn("OTLP export error attempt=" + (attempt + 1) + "/" + MAX_RETRIES + ": " + e.getMessage());
+                AgentLogger.warn("OTLP export error attempt=" + (attempt + 1) + "/" + maxRetries + ": " + e.getMessage());
             }
         }
         return CompletableResultCode.ofFailure();
@@ -156,8 +156,11 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
 
     private static void appendAttributes(StringBuilder sb, Map<AttributeKey<?>, Object> attrs) {
         if (attrs == null || attrs.isEmpty()) return;
+        java.util.Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
         boolean first = true;
         for (Map.Entry<AttributeKey<?>, Object> entry : attrs.entrySet()) {
+            // spanDrop에 포함된 키는 내보내지 않음
+            if (!dropKeys.isEmpty() && dropKeys.contains(entry.getKey().getKey())) continue;
             if (!first) sb.append(",");
             first = false;
             sb.append("{\"key\":\"").append(escapeJson(entry.getKey().getKey())).append("\",\"value\":");

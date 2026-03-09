@@ -12,7 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 설정된 초당 목표 스팬 수(Target SPS)를 유지하도록 확률을 동적으로 조정합니다.
  */
 public final class AdaptiveSampler implements Sampler {
-    private final long targetSps;
+    private volatile long targetSps;
     private final AtomicLong spanCount = new AtomicLong(0);
     private volatile double currentRate;
     private volatile long idUpperBound;
@@ -79,5 +79,18 @@ public final class AdaptiveSampler implements Sampler {
 
     public double getCurrentRate() {
         return currentRate;
+    }
+
+    /**
+     * 원격 설정 변경 시 targetTps와 초기 샘플링 비율을 동적으로 업데이트한다.
+     *
+     * @param newTargetTps 새 목표 TPS (0 이하면 현재 유지)
+     * @param newRate      새 샘플링 비율 (0.0 ~ 1.0)
+     */
+    public void update(long newTargetTps, double newRate) {
+        if (newTargetTps > 0) {
+            this.targetSps = newTargetTps;
+        }
+        updateRate(Math.max(0.0, Math.min(1.0, newRate)));
     }
 }

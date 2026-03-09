@@ -2,8 +2,10 @@ package com.agent.instrumentation;
 
 import com.agent.common.utils.generator.IdGenerator;
 import com.agent.config.AgentConfig;
+import com.agent.config.RemoteConfigPoller;
 import com.agent.logs.AgentLogger;
 import com.agent.logs.TraceLogger;
+import com.agent.sampler.AdaptiveSampler;
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
 import com.agent.logs.FileLogExporter;
@@ -30,10 +32,12 @@ public final class AgentRuntime {
         AgentConfig config = AgentConfig.load();
 
         SpanExporter exporter = buildExporter(config);
-        
+
         Sampler sampler;
+        AdaptiveSampler adaptiveSampler = null;
         if (config.getTargetSps() > 0) {
-            sampler = new com.agent.sampler.AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
+            adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
+            sampler = adaptiveSampler;
             AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + ")");
         } else {
             sampler = Sampler.traceIdRatioBased(config.getSampleRate());
@@ -52,6 +56,12 @@ public final class AgentRuntime {
 
         // MDC service 이름을 TraceLogger에 주입
         TraceLogger.setServiceName(config.getServiceName());
+
+        // 원격 설정 폴러 시작 (대시보드 pull 방식)
+        RemoteConfigPoller poller = RemoteConfigPoller.startIfConfigured(PROVIDER);
+        if (poller != null && adaptiveSampler != null) {
+            poller.setAdaptiveSampler(adaptiveSampler);
+        }
 
         AgentLogger.info("service=" + config.getServiceName()
                 + " endpoint=" + config.getExporterEndpoint()

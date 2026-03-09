@@ -51,11 +51,18 @@ public final class JvmMetricsCollector {
 
     static void collect() {
         try {
+            String metricsScope = com.agent.config.RemoteConfigHolder.get().getMetrics();
+            if ("disabled".equals(metricsScope)) {
+                return;
+            }
+
             collectMemory();
-            collectGc();
-            collectThreads();
-            collectCpu();
-            
+            if (!"jvm_only".equals(metricsScope)) {
+                collectGc();
+                collectThreads();
+                collectCpu();
+            }
+
             // 수집 완료 후 파이프라인으로 전송
             MetricRegistry.get().scrapeAndEmit();
         } catch (Throwable t) {

@@ -10,6 +10,7 @@ import com.agent.span.SpanContext;
 import com.agent.span.SpanKind;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
+import org.slf4j.MDC;
 
 /**
  * ByteBuddy advice for controller methods.
@@ -21,10 +22,20 @@ import net.bytebuddy.asm.Advice;
  */
 public final class ControllerMethodAdvice {
 
+    // 서비스 이름은 JVM 시작 시 한 번만 로드 (AgentConfig.load() 반복 호출 방지)
+    private static final String SERVICE_NAME = com.agent.config.AgentConfig.load().getServiceName();
+
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
             @Advice.Origin("#t") String typeName,
             @Advice.Origin("#m") String methodName) {
+
+        // serviceDisable 체크: 비활성화된 서비스면 계측 건너뜀
+        com.agent.config.RemoteConfig remoteConfig = com.agent.config.RemoteConfigHolder.get();
+        if (!remoteConfig.getServiceDisable().isEmpty()
+                && remoteConfig.getServiceDisable().contains(SERVICE_NAME)) {
+            return null;
+        }
 
         // span name: Spring RequestContextHolder로 HTTP 정보 추출, fallback은 ClassName#method
         String spanName;
@@ -79,10 +90,42 @@ public final class ControllerMethodAdvice {
             span.setAttribute("http.target", uri);
         }
 
+        // customHeaders: 원격 설정에서 지정한 HTTP 헤더를 스팬 속성으로 캡처
+        java.util.List<String> customHeaders = remoteConfig.getCustomHeaders();
+        if (!customHeaders.isEmpty()) {
+            try {
+                Class<?> rch = Class.forName(
+                        "org.springframework.web.context.request.RequestContextHolder");
+                Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
+                if (attrs != null) {
+                    Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
+                    for (String header : customHeaders) {
+                        try {
+                            String val = (String) req.getClass()
+                                    .getMethod("getHeader", String.class).invoke(req, header);
+                            if (val != null) {
+                                span.setAttribute("http.request.header." + header.toLowerCase(), val);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+
         Scope scope = span.makeCurrent();
+
+        // MDC에 traceId/spanId 주입 — 이 span의 duration 동안 모든 log에 반영됨
+        String prevTraceId = MDC.get("traceId");
+        String prevSpanId = MDC.get("spanId");
+        SpanContext spanCtx = span.getContext();
+        if (spanCtx != null && spanCtx.isValid()) {
+            MDC.put("traceId", spanCtx.getTraceId());
+            MDC.put("spanId", spanCtx.getSpanId());
+        }
+
         AgentLogger.debug("[HTTP] span started: " + spanName
                 + (remoteParent != null ? " (propagated traceId=" + remoteParent.getTraceId() + ")" : ""));
-        return new State(span, scope);
+        return new State(span, scope, prevTraceId, prevSpanId);
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
@@ -97,15 +140,31 @@ public final class ControllerMethodAdvice {
         }
         state.scope.close();
         state.span.end();
+
+        // MDC 복원 — 이전 값이 없으면 제거, 있으면 복원 (중첩 span 지원)
+        if (state.prevTraceId == null) {
+            MDC.remove("traceId");
+        } else {
+            MDC.put("traceId", state.prevTraceId);
+        }
+        if (state.prevSpanId == null) {
+            MDC.remove("spanId");
+        } else {
+            MDC.put("spanId", state.prevSpanId);
+        }
     }
 
     public static final class State {
         public final Span span;
         public final Scope scope;
+        public final String prevTraceId;
+        public final String prevSpanId;
 
-        public State(Span span, Scope scope) {
+        public State(Span span, Scope scope, String prevTraceId, String prevSpanId) {
             this.span = span;
             this.scope = scope;
+            this.prevTraceId = prevTraceId;
+            this.prevSpanId = prevSpanId;
         }
     }
 

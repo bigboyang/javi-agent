@@ -69,6 +69,11 @@ public final class BatchSpanProcessor implements SpanProcessor {
             return;
         }
 
+        // 긴급 차단 — emergencyOff 시 모든 스팬 드롭
+        if (com.agent.config.RemoteConfigHolder.get().isEmergencyOff()) {
+            return;
+        }
+
         boolean originallySampled = span.getContext().getTraceFlags().isSampled();
 
         // 1. Head Sampling에 의해 이미 선택된 경우 (가장 빈번한 경로)
@@ -90,13 +95,16 @@ public final class BatchSpanProcessor implements SpanProcessor {
         }
         com.agent.span.ReadableSpan readableSpan = (com.agent.span.ReadableSpan) span;
 
+        // 원격 설정에서 활성 tail policy 확인
+        java.util.Set<String> policy = com.agent.config.RemoteConfigHolder.get().getTailPolicy();
+
         // 1. 에러 기반 (Error-based)
-        if (readableSpan.getStatus() == com.agent.span.SpanStatus.ERROR) {
+        if (policy.contains("error") && readableSpan.getStatus() == com.agent.span.SpanStatus.ERROR) {
             return true;
         }
 
         // 2. 대기시간 기반 (Latency-based)
-        if (slowThresholdNanos > 0) {
+        if (policy.contains("slow") && slowThresholdNanos > 0) {
             long duration = readableSpan.getEndTimeNanos() - readableSpan.getStartTimeNanos();
             if (duration >= slowThresholdNanos) {
                 return true;
@@ -104,7 +112,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
         }
 
         // 3. 검색/속성 기반 (Search/Attribute-based)
-        if (!criticalUrls.isEmpty()) {
+        if (policy.contains("critical_url") && !criticalUrls.isEmpty()) {
             String name = readableSpan.getName();
             for (String url : criticalUrls) {
                 if (name.contains(url)) {
@@ -114,12 +122,11 @@ public final class BatchSpanProcessor implements SpanProcessor {
         }
 
         // 4. 클러스터링 기반 (Clustering-based)
-        // 각 패턴(Operation Name)당 최소 clusterMinSamples 개수는 무조건 수집
-        if (clusterMinSamples > 0) {
+        if (policy.contains("cluster") && clusterMinSamples > 0) {
             String name = readableSpan.getName();
             java.util.concurrent.atomic.AtomicLong counter = clusterCounters.computeIfAbsent(name, k -> new java.util.concurrent.atomic.AtomicLong(0));
             if (counter.incrementAndGet() <= clusterMinSamples) {
-                return true; // 이 패턴의 대표 샘플로 선정
+                return true;
             }
         }
 
@@ -127,8 +134,20 @@ public final class BatchSpanProcessor implements SpanProcessor {
     }
 
     private void offerToQueue(Span span) {
-        if (!queue.offer(span)) {
-            AgentLogger.debug("[BatchSpanProcessor] Queue full, dropping span.");
+        if (com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
+            // 드롭 정책: 큐가 꽉 차면 즉시 드롭 (기본값)
+            if (!queue.offer(span)) {
+                AgentLogger.debug("[BatchSpanProcessor] Queue full, dropping span.");
+            }
+        } else {
+            // 블로킹 정책: 큐에 공간이 생길 때까지 대기 (최대 100ms)
+            try {
+                if (!queue.offer(span, 100, TimeUnit.MILLISECONDS)) {
+                    AgentLogger.debug("[BatchSpanProcessor] Queue full after 100ms wait, dropping span.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
