@@ -2,6 +2,7 @@ package com.agent.trace.exporter;
 
 import com.agent.common.OtlpHttpSender;
 import com.agent.common.OtlpHttpSender.SendResult;
+import com.agent.common.ResourceInfo;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.logs.AgentLogger;
 import com.agent.span.AttributeKey;
@@ -172,14 +173,24 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
      */
     static String toJson(Collection<Span> spans, String serviceName) {
         // 예상 용량: 스팬당 약 600B
-        StringBuilder sb = new StringBuilder(spans.size() * 600 + 256);
+        StringBuilder sb = new StringBuilder(spans.size() * 600 + 512);
 
         sb.append("{\"resourceSpans\":[{\"resource\":{\"attributes\":[");
-        appendStringAttr(sb, "service.name", serviceName);
-        sb.append(",");
-        appendStringAttr(sb, "telemetry.sdk.name", "javi-agent");
-        sb.append(",");
-        appendStringAttr(sb, "telemetry.sdk.language", "java");
+
+        // ResourceInfo에서 동적으로 모든 속성 가져오기
+        boolean firstResAttr = true;
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            if (!firstResAttr) sb.append(",");
+            firstResAttr = false;
+            appendStringAttr(sb, entry.getKey(), entry.getValue());
+        }
+
+        // service.name이 ResourceInfo에 없을 경우를 대비해 (이미 ResourceInfo에 포함되어 있지만 보장)
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            sb.append(",");
+            appendStringAttr(sb, "service.name", serviceName);
+        }
+
         sb.append("]},\"scopeSpans\":[{\"scope\":{\"name\":\"agent-auto\",\"version\":\"1.0.0\"},\"spans\":[");
 
         boolean firstSpan = true;

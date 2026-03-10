@@ -75,6 +75,7 @@ com/agent/propagation/W3CBaggagePropagator.class
 com/agent/span/SpanEvent.class
 com/agent/span/NoopSpan.class
 com/agent/metric/PrometheusMetricExporter.class
+com/agent/config/RemoteConfigValidator.class
 com/agent/span/NoopSpanBuilder.class
 com/agent/instrumentation/KafkaConsumerAdvice.class
 com/agent/instrumentation/LogbackAdvice.class
@@ -102,6 +103,7 @@ com/agent/trace/SdkTracer.class
 com/agent/instrumentation/RedisLettuceAdvice$State.class
 com/agent/metric/MetricLogger$MetricFormatter.class
 com/agent/trace/exporter/OtlpHttpSpanExporter$1.class
+com/agent/common/utils/SqlSanitizer.class
 com/agent/propagation/TextMapPropagator.class
 com/agent/logs/LogRecord.class
 com/agent/metric/MetricLogger.class
@@ -118,6 +120,7 @@ com/agent/span/SpanLink.class
 com/agent/trace/Tracer.class
 com/agent/common/grpc/GrpcSender.class
 com/agent/span/Context$BaggageScope.class
+com/agent/common/utils/HeaderSanitizer.class
 com/agent/metric/FileMetricExporter.class
 com/agent/trace/SdkTracerProvider.class
 com/agent/metric/MetricData$MetricType.class
@@ -159,6 +162,7 @@ com/agent/sampler/TraceIdRatioBasedSampler.class
 com/agent/instrumentation/JavaHttpClientAdvice$State.class
 com/agent/trace/exporter/LoggingSpanExporter.class
 com/agent/trace/processor/BatchSpanProcessor.class
+com/agent/common/OtlpHttpSender$1.class
 com/agent/trace/exporter/NoopSpanExporter.class
 com/agent/sampler/Sampler.class
 com/agent/trace/SdkTracerProviderBuilder.class

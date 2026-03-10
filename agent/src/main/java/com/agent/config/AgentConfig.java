@@ -54,7 +54,7 @@ public final class AgentConfig {
         int minSamples = Integer.parseInt(get("JAVI_CLUSTER_MIN_SAMPLES", "javi.cluster.min.samples", "5"));
         long targetSps = parseLong(get("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
 
-        String protocol = get("JAVI_EXPORTER_PROTOCOL", "javi.exporter.protocol", "http");
+        String protocol = get("JAVI_EXPORTER_PROTOCOL", "javi.exporter.protocol", "grpc");
         String grpcEndpoint = get("JAVI_GRPC_ENDPOINT", "javi.grpc.endpoint", "http://localhost:4317");
 
         return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,

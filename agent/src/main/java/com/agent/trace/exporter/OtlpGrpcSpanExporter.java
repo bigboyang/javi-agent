@@ -3,6 +3,7 @@ package com.agent.trace.exporter;
 import com.agent.common.grpc.GrpcSender;
 import com.agent.common.grpc.GrpcSender.SendResult;
 import com.agent.common.grpc.ProtoEncoder;
+import com.agent.common.ResourceInfo;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.logs.AgentLogger;
 import com.agent.span.AttributeKey;
@@ -194,10 +195,18 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
     }
 
     private static byte[] encodeResource(String serviceName) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(128);
-        ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
-        ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("telemetry.sdk.name", "javi-agent"));
-        ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("telemetry.sdk.language", "java"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        
+        // ResourceInfo에서 동적으로 모든 속성 가져오기
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+        }
+
+        // service.name이 ResourceInfo에 없을 경우를 대비해 보장
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
+        }
+        
         return out.toByteArray();
     }
 

@@ -3,6 +3,7 @@ package com.agent.metric;
 import com.agent.common.DataExporter;
 import com.agent.common.OtlpHttpSender;
 import com.agent.common.OtlpHttpSender.SendResult;
+import com.agent.common.ResourceInfo;
 import com.agent.logs.AgentLogger;
 
 import java.net.URI;
@@ -148,13 +149,25 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
      */
     static String toJson(Collection<MetricData> metrics, String serviceName) {
         // 예상 용량: 메트릭당 약 300B * 포인트 수
-        int estimatedSize = metrics.size() * 300 + 256;
+        int estimatedSize = metrics.size() * 300 + 512;
         StringBuilder sb = new StringBuilder(estimatedSize);
 
         sb.append("{\"resourceMetrics\":[{\"resource\":{\"attributes\":[");
-        appendStringAttr(sb, "service.name", serviceName);
-        sb.append(",");
-        appendStringAttr(sb, "telemetry.sdk.name", "javi-agent");
+
+        // ResourceInfo에서 동적으로 모든 속성 가져오기
+        boolean firstResAttr = true;
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            if (!firstResAttr) sb.append(",");
+            firstResAttr = false;
+            appendStringAttr(sb, entry.getKey(), entry.getValue());
+        }
+
+        // service.name이 ResourceInfo에 없을 경우를 대비해 (이미 ResourceInfo에 포함되어 있지만 보장)
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            sb.append(",");
+            appendStringAttr(sb, "service.name", serviceName);
+        }
+
         sb.append("]},\"scopeMetrics\":[{\"scope\":{\"name\":\"javi-metric\",\"version\":\"1.0.0\"},");
         sb.append("\"metrics\":[");
 

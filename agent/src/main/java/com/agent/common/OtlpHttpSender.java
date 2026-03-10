@@ -59,6 +59,34 @@ public final class OtlpHttpSender {
     private final java.util.concurrent.atomic.AtomicInteger consecutiveFailures = new java.util.concurrent.atomic.AtomicInteger(0);
     private final java.util.concurrent.atomic.AtomicLong lastOpenTime = new java.util.concurrent.atomic.AtomicLong(0);
 
+    private final long timeoutMs;
+    private final Map<String, String> defaultHeaders;
+    private final HttpClient httpClient;
+
+    private OtlpHttpSender(long timeoutMs, Map<String, String> headers) {
+        this.timeoutMs = timeoutMs;
+        this.defaultHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(headers));
+        this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .executor(Executors.newCachedThreadPool(new ThreadFactory() {
+                    @Override
+                    public Thread newThread(Runnable r) {
+                        Thread t = new Thread(r, "javi-otlp-http");
+                        t.setDaemon(true);
+                        return t;
+                    }
+                }))
+                .build();
+    }
+
+    public static OtlpHttpSender create() {
+        return newBuilder().build();
+    }
+
+    public static Builder newBuilder() {
+        return new Builder();
+    }
+
     // ---- 핵심 전송 메서드 ----
 
     public SendResult send(URI endpointUri, String jsonBody, Map<String, String> extraHeaders) {
@@ -82,9 +110,13 @@ public final class OtlpHttpSender {
         }
 
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            // ... (기존 retry 로직 생략을 위해 내부 로직 유지하되 결과에 따라 상태 업데이트)
+            if (attempt > 0) {
+                if (!sleepUninterruptibly(RETRY_BACKOFF_MS[attempt])) {
+                    return SendResult.FAILURE;
+                }
+            }
+
             try {
-                // (기존 전송 코드 호출 부분)
                 HttpResponse<Void> response = performHttpRequest(endpointUri, jsonBody, extraHeaders);
                 int status = response.statusCode();
 
@@ -95,13 +127,20 @@ public final class OtlpHttpSender {
 
                 if (status >= 400 && status < 500) {
                     // 4xx는 서버 거부이므로 회로 차단 대상 아님 (페이로드 문제)
+                    AgentLogger.warn("OTLP 전송 실패 (4xx): status=" + status + " endpoint=" + endpointUri);
                     return SendResult.FAILURE;
                 }
                 
                 // 5xx 또는 기타 오류
-                onFailure(endpointUri);
+                AgentLogger.warn("OTLP 전송 실패 (5xx/기타): status=" + status + " attempt=" + (attempt + 1));
+                if (attempt == MAX_ATTEMPTS - 1) {
+                    onFailure(endpointUri);
+                }
             } catch (Exception e) {
-                onFailure(endpointUri);
+                AgentLogger.warn("OTLP 전송 에러: " + e.getMessage() + " attempt=" + (attempt + 1));
+                if (attempt == MAX_ATTEMPTS - 1) {
+                    onFailure(endpointUri);
+                }
             }
         }
         return SendResult.FAILURE;
@@ -213,11 +252,6 @@ public final class OtlpHttpSender {
 
         public OtlpHttpSender build() {
             return new OtlpHttpSender(timeoutMs, headers);
-        }
-
-        // static 접근을 위한 위임 메서드
-        private static long resolveTimeoutMs() {
-            return OtlpHttpSender.resolveTimeoutMs();
         }
     }
 }

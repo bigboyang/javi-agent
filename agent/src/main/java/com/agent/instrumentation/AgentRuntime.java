@@ -9,19 +9,30 @@ import com.agent.sampler.AdaptiveSampler;
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
 import com.agent.common.grpc.GrpcSender;
+import com.agent.common.OtlpHttpSender;
 import com.agent.logs.OtlpGrpcLogExporter;
+import com.agent.logs.OtlpHttpLogExporter;
 import com.agent.logs.SdkLoggerProvider;
 import com.agent.metric.CompositeMetricExporter;
 import com.agent.metric.FileMetricExporter;
 import com.agent.metric.OtlpGrpcMetricExporter;
+import com.agent.metric.OtlpHttpMetricExporter;
 import com.agent.metric.SdkMeterProvider;
 import com.agent.trace.SdkTracerProvider;
 import com.agent.trace.Tracer;
 import com.agent.trace.exporter.CompositeSpanExporter;
 import com.agent.trace.exporter.LoggingSpanExporter;
 import com.agent.trace.exporter.OtlpGrpcSpanExporter;
+import com.agent.trace.exporter.OtlpHttpSpanExporter;
 import com.agent.trace.exporter.SpanExporter;
 import java.util.Arrays;
+
+import com.agent.common.OtlpHttpSender;
+import com.agent.common.grpc.GrpcSender;
+import com.agent.logs.OtlpHttpLogExporter;
+import com.agent.logs.OtlpGrpcLogExporter;
+import com.agent.metric.OtlpHttpMetricExporter;
+import com.agent.metric.OtlpGrpcMetricExporter;
 
 /**
  * 에이전트 전역 TracerProvider를 보유한다.
@@ -33,9 +44,34 @@ public final class AgentRuntime {
 
     static {
         AgentConfig config = AgentConfig.load();
+        String protocol = config.getExporterProtocol().toLowerCase();
 
-        GrpcSender sharedGrpc = GrpcSender.create(config.getGrpcEndpoint(), 10_000L);
-        SpanExporter exporter = buildExporter(config, sharedGrpc);
+        SpanExporter spanExporter;
+        SdkLoggerProvider loggerProvider;
+        SdkMeterProvider meterProvider;
+
+        // 성능 최적화: gRPC를 기본으로 사용 (JSON 직렬화 오버헤드 제거)
+        if ("http".equals(protocol)) {
+            // 명시적으로 HTTP가 설정된 경우에만 활성화
+            OtlpHttpSender sharedHttp = OtlpHttpSender.create();
+            spanExporter = buildHttpSpanExporter(config, sharedHttp);
+            loggerProvider = new SdkLoggerProvider(new OtlpHttpLogExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp));
+            meterProvider = new SdkMeterProvider(
+                    CompositeMetricExporter.of(
+                            new FileMetricExporter(),
+                            new OtlpHttpMetricExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp)));
+            AgentLogger.info("프로토콜: HTTP (JSON) endpoint=" + config.getExporterEndpoint());
+        } else {
+            // 기본값: gRPC (Protobuf)
+            GrpcSender sharedGrpc = GrpcSender.create(config.getGrpcEndpoint(), 10_000L);
+            spanExporter = buildGrpcSpanExporter(config, sharedGrpc);
+            loggerProvider = new SdkLoggerProvider(new OtlpGrpcLogExporter(config.getServiceName(), sharedGrpc));
+            meterProvider = new SdkMeterProvider(
+                    CompositeMetricExporter.of(
+                            new FileMetricExporter(),
+                            new OtlpGrpcMetricExporter(config.getServiceName(), sharedGrpc)));
+            AgentLogger.info("프로토콜: gRPC (Protobuf) endpoint=" + config.getGrpcEndpoint());
+        }
 
         Sampler sampler;
         AdaptiveSampler adaptiveSampler = null;
@@ -49,16 +85,10 @@ public final class AgentRuntime {
 
         PROVIDER = new SdkTracerProvider(IdGenerator.random());
         PROVIDER.setSampler(sampler);
-        PROVIDER.addBatchSpanProcessor(exporter, 2048, 512, 5000);
+        PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
 
         // JaviSdk 초기화 (Trace + Log + Metric 통합 관리)
-        SdkLoggerProvider lp = new SdkLoggerProvider(
-                new OtlpGrpcLogExporter(config.getServiceName(), sharedGrpc));
-        SdkMeterProvider mp = new SdkMeterProvider(
-                CompositeMetricExporter.of(
-                        new FileMetricExporter(),
-                        new OtlpGrpcMetricExporter(config.getServiceName(), sharedGrpc)));
-        JaviSdk.initialize(PROVIDER, lp, mp);
+        JaviSdk.initialize(PROVIDER, loggerProvider, meterProvider);
 
         TRACER = PROVIDER.getTracer("agent-auto");
 
@@ -72,7 +102,6 @@ public final class AgentRuntime {
         }
 
         AgentLogger.info("service=" + config.getServiceName()
-                + " endpoint=" + config.getExporterEndpoint()
                 + " sampleRate=" + config.getSampleRate());
         AgentLogger.info("trace 로그 파일: " + TraceLogger.logFilePath());
     }
@@ -109,15 +138,26 @@ public final class AgentRuntime {
         return PROVIDER;
     }
 
-    private static SpanExporter buildExporter(AgentConfig config, GrpcSender grpcSender) {
+    private static SpanExporter buildGrpcSpanExporter(AgentConfig config, GrpcSender grpcSender) {
         LoggingSpanExporter loggingExporter = new LoggingSpanExporter();
         try {
             SpanExporter otlpExporter = new OtlpGrpcSpanExporter(config.getServiceName(), grpcSender);
-            AgentLogger.info("프로토콜: gRPC endpoint=" + config.getGrpcEndpoint());
             // LoggingSpanExporter를 앞에 두어 Collector 없이도 로그에 스팬이 출력됨
             return CompositeSpanExporter.create(Arrays.asList(loggingExporter, otlpExporter));
         } catch (Exception e) {
-            AgentLogger.warn("OTLP exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
+            AgentLogger.warn("OTLP gRPC exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
+            return loggingExporter;
+        }
+    }
+
+    private static SpanExporter buildHttpSpanExporter(AgentConfig config, OtlpHttpSender httpSender) {
+        LoggingSpanExporter loggingExporter = new LoggingSpanExporter();
+        try {
+            SpanExporter otlpExporter = new OtlpHttpSpanExporter(config.getExporterEndpoint(), config.getServiceName(), httpSender);
+            // LoggingSpanExporter를 앞에 두어 Collector 없이도 로그에 스팬이 출력됨
+            return CompositeSpanExporter.create(Arrays.asList(loggingExporter, otlpExporter));
+        } catch (Exception e) {
+            AgentLogger.warn("OTLP HTTP exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
             return loggingExporter;
         }
     }

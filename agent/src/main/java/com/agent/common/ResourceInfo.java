@@ -1,11 +1,16 @@
 package com.agent.common;
 
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 에이전트 공통 리소스 속성 수집기.
@@ -15,12 +20,15 @@ import java.util.Map;
  * <ul>
  *   <li>service.name      - JAVI_SERVICE_NAME / javi.service.name</li>
  *   <li>host.name         - InetAddress.getLocalHost().getHostName()</li>
+ *   <li>host.fqdn         - InetAddress.getLocalHost().getCanonicalHostName()</li>
  *   <li>process.pid       - ProcessHandle.current().pid()</li>
  *   <li>os.type           - os.name 시스템 프로퍼티 기반</li>
  *   <li>deployment.environment - JAVI_DEPLOYMENT_ENV / javi.deployment.env</li>
  *   <li>telemetry.sdk.name     - "javi-agent"</li>
  *   <li>telemetry.sdk.language - "java"</li>
  *   <li>telemetry.sdk.version  - "1.0.0"</li>
+ *   <li>k8s.pod.name / k8s.namespace / k8s.node.name - 환경변수 및 자동 감지</li>
+ *   <li>container.id      - /proc/self/cgroup 또는 /proc/self/mountinfo에서 추출</li>
  * </ul>
  */
 public final class ResourceInfo {
@@ -33,12 +41,8 @@ public final class ResourceInfo {
     static {
         Map<String, String> m = new LinkedHashMap<>();
 
-        // host.name
-        try {
-            m.put("host.name", InetAddress.getLocalHost().getHostName());
-        } catch (Exception e) {
-            m.put("host.name", "unknown");
-        }
+        // host.name & host.fqdn
+        detectHost(m);
 
         // service.instance.id (멀티 인스턴스 구분 필수)
         m.put("service.instance.id", java.util.UUID.randomUUID().toString());
@@ -48,21 +52,20 @@ public final class ResourceInfo {
             m.put("process.pid", String.valueOf(ProcessHandle.current().pid()));
         } catch (Exception ignored) {}
 
-        // os.type (OTel: "linux" | "darwin" | "windows" | ...)
-        String osName = System.getProperty("os.name", "unknown").toLowerCase();
-        if (osName.contains("win")) {
-            m.put("os.type", "windows");
-        } else if (osName.contains("mac")) {
-            m.put("os.type", "darwin");
-        } else {
-            m.put("os.type", "linux");
-        }
+        // os.type
+        detectOs(m);
 
         // deployment.environment
         String env = get("JAVI_DEPLOYMENT_ENV", "javi.deployment.env", "");
         if (!env.isEmpty()) {
             m.put("deployment.environment", env);
         }
+
+        // Kubernetes Resource Detection
+        detectKubernetes(m);
+
+        // Container ID Detection
+        detectContainer(m);
 
         // SDK metadata
         m.put("telemetry.sdk.name", "javi-agent");
@@ -91,5 +94,126 @@ public final class ResourceInfo {
         val = System.getProperty(propKey);
         if (val != null && !val.isEmpty()) return val;
         return defaultValue;
+    }
+
+    private static void detectHost(Map<String, String> m) {
+        try {
+            InetAddress localHost = InetAddress.getLocalHost();
+            String hostName = localHost.getHostName();
+            String fqdn = localHost.getCanonicalHostName();
+
+            // InetAddress가 localhost 등 의미 없는 값을 반환할 경우 환경변수 확인
+            if ("localhost".equalsIgnoreCase(hostName) || "127.0.0.1".equals(hostName)) {
+                String envHost = System.getenv("HOSTNAME");
+                if (envHost != null && !envHost.isEmpty()) hostName = envHost;
+            }
+
+            m.put("host.name", hostName);
+            if (fqdn != null && !fqdn.isEmpty() && !fqdn.equals(hostName)) {
+                m.put("host.fqdn", fqdn);
+            }
+        } catch (Exception e) {
+            m.put("host.name", "unknown");
+        }
+    }
+
+    private static void detectOs(Map<String, String> m) {
+        String osName = System.getProperty("os.name", "unknown").toLowerCase();
+        if (osName.contains("win")) {
+            m.put("os.type", "windows");
+        } else if (osName.contains("mac")) {
+            m.put("os.type", "darwin");
+        } else {
+            m.put("os.type", "linux");
+        }
+    }
+
+    private static void detectKubernetes(Map<String, String> m) {
+        // Pod Name
+        String podName = System.getenv("K8S_POD_NAME");
+        if (podName != null && !podName.isEmpty()) {
+            m.put("k8s.pod.name", podName);
+        }
+
+        // Namespace
+        String namespace = System.getenv("K8S_NAMESPACE");
+        if (namespace == null || namespace.isEmpty()) {
+            // Fallback: ServiceAccount 파일에서 읽기
+            namespace = readFileContents("/var/run/secrets/kubernetes.io/serviceaccount/namespace");
+        }
+        if (namespace != null && !namespace.isEmpty()) {
+            m.put("k8s.namespace", namespace.trim());
+        }
+
+        // Node Name
+        String nodeName = System.getenv("K8S_NODE_NAME");
+        if (nodeName != null && !nodeName.isEmpty()) {
+            m.put("k8s.node.name", nodeName);
+        }
+    }
+
+    private static void detectContainer(Map<String, String> m) {
+        String containerId = detectContainerIdFromCgroup();
+        if (containerId == null || containerId.isEmpty()) {
+            containerId = detectContainerIdFromMountInfo();
+        }
+
+        if (containerId != null && !containerId.isEmpty()) {
+            m.put("container.id", containerId);
+        }
+    }
+
+    /**
+     * /proc/self/cgroup 파일에서 컨테이너 ID를 추출한다. (cgroup v1용)
+     */
+    private static String detectContainerIdFromCgroup() {
+        String cgroupFile = "/proc/self/cgroup";
+        try (BufferedReader br = new BufferedReader(new FileReader(cgroupFile))) {
+            String line;
+            Pattern dockerIdPattern = Pattern.compile("^[0-9a-f]{64}$");
+            while ((line = br.readLine()) != null) {
+                // 예: 11:name=systemd:/docker/76595...
+                String[] parts = line.split("/");
+                for (String part : parts) {
+                    if (part.length() == 64) {
+                        Matcher m = dockerIdPattern.matcher(part);
+                        if (m.matches()) return part;
+                    }
+                    // kubernetes: .../pod<uid>/<containerid>
+                    if (part.endsWith(".scope")) {
+                        String id = part.substring(0, part.length() - 6);
+                        if (id.contains("-")) id = id.substring(id.lastIndexOf("-") + 1);
+                        if (id.length() == 64 && dockerIdPattern.matcher(id).matches()) return id;
+                    }
+                }
+            }
+        } catch (IOException ignored) {}
+        return null;
+    }
+
+    /**
+     * /proc/self/mountinfo 파일에서 컨테이너 ID를 추출한다. (cgroup v2용)
+     */
+    private static String detectContainerIdFromMountInfo() {
+        String mountFile = "/proc/self/mountinfo";
+        try (BufferedReader br = new BufferedReader(new FileReader(mountFile))) {
+            String line;
+            Pattern dockerIdPattern = Pattern.compile("[0-9a-f]{64}");
+            while ((line = br.readLine()) != null) {
+                Matcher matcher = dockerIdPattern.matcher(line);
+                if (matcher.find()) {
+                    return matcher.group();
+                }
+            }
+        } catch (IOException ignored) {}
+        return null;
+    }
+
+    private static String readFileContents(String path) {
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            return br.readLine();
+        } catch (IOException e) {
+            return null;
+        }
     }
 }

@@ -4,6 +4,7 @@ import com.agent.common.DataExporter;
 import com.agent.common.grpc.GrpcSender;
 import com.agent.common.grpc.GrpcSender.SendResult;
 import com.agent.common.grpc.ProtoEncoder;
+import com.agent.common.ResourceInfo;
 import com.agent.logs.AgentLogger;
 
 import java.io.ByteArrayOutputStream;
@@ -180,9 +181,18 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
     }
 
     private static byte[] encodeResource(String serviceName) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(96);
-        ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
-        ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("telemetry.sdk.name", "javi-agent"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+
+        // ResourceInfo에서 동적으로 모든 속성 가져오기
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+        }
+
+        // service.name 보장
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
+        }
+
         return out.toByteArray();
     }
 

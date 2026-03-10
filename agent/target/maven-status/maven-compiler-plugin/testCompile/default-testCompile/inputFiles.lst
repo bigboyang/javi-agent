@@ -4,3 +4,4 @@
 /Users/kkc/APM/agent/src/test/java/com/agent/trace/SdkTracerProviderTest.java
 /Users/kkc/APM/agent/src/test/java/com/agent/trace/processor/BatchSpanProcessorTest.java
 /Users/kkc/APM/agent/src/test/java/com/agent/span/SdkSpanTest.java
+/Users/kkc/APM/agent/src/test/java/com/agent/common/ResourceInfoTest.java

@@ -3,6 +3,7 @@ package com.agent.logs;
 import com.agent.common.DataExporter;
 import com.agent.common.OtlpHttpSender;
 import com.agent.common.OtlpHttpSender.SendResult;
+import com.agent.common.ResourceInfo;
 
 import java.net.URI;
 import java.util.Collection;
@@ -140,12 +141,24 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
      */
     static String toJson(Collection<LogRecord> logs, String serviceName) {
         // 예상 용량: 레코드당 약 400B 예상 → 초기 할당으로 재할당 최소화
-        StringBuilder sb = new StringBuilder(logs.size() * 400 + 256);
+        StringBuilder sb = new StringBuilder(logs.size() * 400 + 512);
 
         sb.append("{\"resourceLogs\":[{\"resource\":{\"attributes\":[");
-        appendStringAttr(sb, "service.name", serviceName);
-        sb.append(",");
-        appendStringAttr(sb, "telemetry.sdk.name", "javi-agent");
+        
+        // ResourceInfo에서 동적으로 모든 속성 가져오기
+        boolean firstResAttr = true;
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            if (!firstResAttr) sb.append(",");
+            firstResAttr = false;
+            appendStringAttr(sb, entry.getKey(), entry.getValue());
+        }
+        
+        // service.name이 ResourceInfo에 없을 경우를 대비해 (이미 ResourceInfo에 포함되어 있지만 보장)
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            sb.append(",");
+            appendStringAttr(sb, "service.name", serviceName);
+        }
+
         sb.append("]},\"scopeLogs\":[{\"scope\":{\"name\":\"javi-log\",\"version\":\"1.0.0\"},");
         sb.append("\"logRecords\":[");
 
