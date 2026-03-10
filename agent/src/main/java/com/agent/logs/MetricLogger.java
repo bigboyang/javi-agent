@@ -100,10 +100,10 @@ public final class MetricLogger {
                     + " type=counter"
                     + " value=" + e.getValue().get());
         }
-        for (Map.Entry<MetricKey, Histogram> e : reg.histograms().entrySet()) {
+        for (Map.Entry<String, Histogram> e : reg.histograms().entrySet()) {
             Histogram h = e.getValue();
-            LOGGER.info("name=" + e.getKey().getName()
-                    + " attrs=" + e.getKey().getAttributes()
+            LOGGER.info("name=" + e.getKey()
+                    + " attrs={}"
                     + " type=histogram"
                     + " count=" + h.getCount()
                     + " sum=" + h.getSum());

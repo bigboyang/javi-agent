@@ -39,14 +39,21 @@ public final class ApacheHttpClientAdvice {
                 .setSpanKind(SpanKind.CLIENT)
                 .startSpan();
 
-        span.setAttribute("http.method", method);
+        span.setAttribute("http.request.method", method);
         span.setAttribute("url.full", host + uri);
 
-        // 컨텍스트 전파 (Injection)
+        // 컨텍스트 전파 (Injection: TraceContext & Baggage)
         try {
-            SpanContext ctx = span.getContext();
-            String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-01";
-            request.addHeader("traceparent", traceparent);
+            com.agent.propagation.TextMapSetter<org.apache.http.HttpRequest> setter = 
+                (req, key, value) -> req.setHeader(key, value);
+
+            // 1. Trace Context 주입
+            com.agent.propagation.ContextPropagators.getTextMapPropagator()
+                    .inject(span.getContext(), request, setter);
+
+            // 2. Baggage 주입
+            com.agent.propagation.ContextPropagators.getBaggagePropagator()
+                    .inject(com.agent.span.Context.currentBaggage(), request, setter);
         } catch (Throwable ignored) {}
 
         return new State(span, span.makeCurrent());

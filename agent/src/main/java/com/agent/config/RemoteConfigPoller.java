@@ -61,13 +61,23 @@ import java.util.regex.Pattern;
 public final class RemoteConfigPoller {
 
     private final URI configUrl;
+    private final String apiKey;
     private final HttpClient httpClient;
     private final SdkTracerProvider tracerProvider;
     private volatile AdaptiveSampler adaptiveSampler;
     private ScheduledExecutorService scheduler;
 
-    public RemoteConfigPoller(String configUrl, SdkTracerProvider tracerProvider) {
+    public RemoteConfigPoller(String configUrl, String apiKey, SdkTracerProvider tracerProvider) {
         this.configUrl = URI.create(configUrl);
+        this.apiKey = apiKey;
+        
+        // 보안 거버넌스: HTTPS 사용 권장 (localhost 제외)
+        if (!this.configUrl.getScheme().equalsIgnoreCase("https") 
+                && !this.configUrl.getHost().equalsIgnoreCase("localhost")
+                && !this.configUrl.getHost().equalsIgnoreCase("127.0.0.1")) {
+            AgentLogger.warn("[RemoteConfig] 보안 경고: 원격 설정 URL이 HTTPS가 아닙니다. 중간자 공격에 취약할 수 있습니다.");
+        }
+
         this.tracerProvider = tracerProvider;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
@@ -99,11 +109,12 @@ public final class RemoteConfigPoller {
             AgentLogger.info("[RemoteConfig] URL 미설정 — 원격 설정 비활성");
             return null;
         }
+        String apiKey = get("JAVI_REMOTE_CONFIG_API_KEY", "javi.remote.config.api.key", null);
         long intervalSec = parseLong(get("JAVI_REMOTE_CONFIG_POLL_INTERVAL_SEC",
                 "javi.remote.config.poll.interval.sec", "30"), 30L);
-        RemoteConfigPoller poller = new RemoteConfigPoller(url, tracerProvider);
+        RemoteConfigPoller poller = new RemoteConfigPoller(url, apiKey, tracerProvider);
         poller.start(intervalSec);
-        AgentLogger.info("[RemoteConfig] 폴링 시작: url=" + url + " interval=" + intervalSec + "s");
+        AgentLogger.info("[RemoteConfig] 폴링 시작: url=" + url + " interval=" + intervalSec + "s" + (apiKey != null ? " (Auth enabled)" : ""));
         return poller;
     }
 
@@ -126,19 +137,28 @@ public final class RemoteConfigPoller {
 
     void poll() {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(configUrl)
                     .header("Accept", "application/json")
                     .GET()
-                    .timeout(Duration.ofSeconds(5))
-                    .build();
+                    .timeout(Duration.ofSeconds(5));
+            
+            if (apiKey != null && !apiKey.isEmpty()) {
+                reqBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+
+            HttpRequest request = reqBuilder.build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 RemoteConfig config = parse(response.body());
-                applyConfig(config);
-                AgentLogger.debug("[RemoteConfig] 갱신 완료: emergencyOff=" + config.isEmergencyOff()
-                        + " headSampleRate=" + config.getHeadSampleRate()
-                        + " targetTps=" + config.getTargetTps());
+                if (RemoteConfigValidator.isValid(config)) {
+                    applyConfig(config);
+                    AgentLogger.debug("[RemoteConfig] 갱신 완료: emergencyOff=" + config.isEmergencyOff()
+                            + " headSampleRate=" + config.getHeadSampleRate()
+                            + " targetTps=" + config.getTargetTps());
+                } else {
+                    AgentLogger.warn("[RemoteConfig] 폴링 중단: 부적절한 설정값 수신");
+                }
             } else {
                 AgentLogger.warn("[RemoteConfig] 폴링 실패: HTTP " + response.statusCode());
             }

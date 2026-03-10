@@ -35,7 +35,14 @@ public final class LogBatchProcessor {
 
     public void offer(LogRecord record) {
         if (isStopped.get()) return;
-        queue.offer(record);
+        
+        // Backpressure: 큐 임계치 초과 시 폐기 (Drop-newest 전략)
+        if (!queue.offer(record)) {
+            // 원격 설정에서 dropOnFull이 true이면 경고 없이 버리고, false면 로그를 남김 (거버넌스 연동)
+            if (!com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
+                AgentLogger.warn("[LogProcessor] Backpressure: 큐 임계치 초과 — 로그 데이터 폐기 (size=" + queue.size() + ")");
+            }
+        }
     }
 
     public CompletableFuture<Void> shutdown() {

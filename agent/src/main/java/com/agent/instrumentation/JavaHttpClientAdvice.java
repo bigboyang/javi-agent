@@ -26,7 +26,7 @@ public final class JavaHttpClientAdvice {
                 .setSpanKind(SpanKind.CLIENT)
                 .startSpan();
 
-        span.setAttribute("http.method", method);
+        span.setAttribute("http.request.method", method);
         span.setAttribute("url.full", request.uri().toString());
 
         // Java 11 HttpClient은 HttpRequest가 Immutable하므로, 

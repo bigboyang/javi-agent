@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.HeaderSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.propagation.MapTextMapGetter;
 import com.agent.propagation.TraceContextPropagator;
@@ -52,19 +53,34 @@ public final class ControllerMethodAdvice {
                 uri = (String) req.getClass().getMethod("getRequestURI").invoke(req);
                 spanName = httpMethod + " " + uri;
 
-                // W3C traceparent 헤더 추출 — 분산 트레이싱 컨텍스트 전파
+                // W3C traceparent & baggage 헤더 추출 — 분산 트레이싱 및 비즈니스 맥락 전파
                 try {
+                    java.util.Map<String, String> headers = new java.util.HashMap<>();
                     String traceparent = (String) req.getClass()
                             .getMethod("getHeader", String.class).invoke(req, "traceparent");
+                    if (traceparent != null) headers.put("traceparent", traceparent);
+                    
+                    String tracestate = (String) req.getClass()
+                            .getMethod("getHeader", String.class).invoke(req, "tracestate");
+                    if (tracestate != null) headers.put("tracestate", tracestate);
+
+                    String baggageHeader = (String) req.getClass()
+                            .getMethod("getHeader", String.class).invoke(req, "baggage");
+                    if (baggageHeader != null) headers.put("baggage", baggageHeader);
+
+                    // 1. Trace Context 추출
                     if (traceparent != null) {
-                        java.util.Map<String, String> headers = new java.util.HashMap<>();
-                        headers.put("traceparent", traceparent);
-                        String tracestate = (String) req.getClass()
-                                .getMethod("getHeader", String.class).invoke(req, "tracestate");
-                        if (tracestate != null) headers.put("tracestate", tracestate);
-                        SpanContext extracted = TraceContextPropagator.extractStatic(
-                                headers, new MapTextMapGetter());
+                        com.agent.span.SpanContext extracted = com.agent.propagation.TraceContextPropagator.extractStatic(
+                                headers, new com.agent.propagation.MapTextMapGetter());
                         if (extracted.isValid()) remoteParent = extracted;
+                    }
+
+                    // 2. Baggage 추출 및 컨텍스트 설정
+                    com.agent.propagation.Baggage baggage = com.agent.propagation.ContextPropagators
+                            .getBaggagePropagator().extract(headers, new com.agent.propagation.MapTextMapGetter());
+                    if (!baggage.isEmpty()) {
+                        // 추출된 Baggage를 현재 ThreadLocal에 설정 (Scope 관리는 하단 로직과 통합 필요)
+                        com.agent.span.Context.makeCurrent(baggage);
                     }
                 } catch (Throwable ignored) {}
             } else {
@@ -84,7 +100,7 @@ public final class ControllerMethodAdvice {
         Span span = builder.startSpan();
 
         if (httpMethod != null) {
-            span.setAttribute("http.method", httpMethod);
+            span.setAttribute("http.request.method", httpMethod);
         }
         if (uri != null) {
             span.setAttribute("http.target", uri);
@@ -100,6 +116,9 @@ public final class ControllerMethodAdvice {
                 if (attrs != null) {
                     Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
                     for (String header : customHeaders) {
+                        if (HeaderSanitizer.isSensitive(header)) {
+                            continue; // 보안상 민감한 헤더는 캡처 스킵
+                        }
                         try {
                             String val = (String) req.getClass()
                                     .getMethod("getHeader", String.class).invoke(req, header);

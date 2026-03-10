@@ -1,17 +1,14 @@
 package com.agent.span;
 
 /**
- * 현재 스팬을 설정하고 자동으로 복원하기 위한 스코프.
+ * 리소스(Span, Baggage 등)를 현재 컨텍스트로 설정하고 자동으로 복원하기 위한 인터페이스.
  */
-public final class Scope implements AutoCloseable {
-    private final Span previous;
-
-    Scope(Span previous) {
-        this.previous = previous;
-    }
-
+public interface Scope extends AutoCloseable {
     @Override
-    public void close() {
-        Context.restore(previous);
+    void close();
+
+    /** 아무 동작도 하지 않는 스코프. */
+    static Scope noop() {
+        return () -> {};
     }
 }

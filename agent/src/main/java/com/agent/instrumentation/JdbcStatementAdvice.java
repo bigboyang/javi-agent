@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.SqlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
@@ -20,12 +21,15 @@ public final class JdbcStatementAdvice {
     public static State onEnter(@Advice.Argument(0) String sql) {
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.jdbc");
 
+        // 민감한 리터럴 값 마스킹
+        String maskedSql = SqlSanitizer.sanitize(sql);
+
         // span name 인라인 계산
         String spanName;
-        if (sql == null || sql.isEmpty()) {
+        if (maskedSql == null || maskedSql.isEmpty()) {
             spanName = "DB Query";
         } else {
-            String trimmed = sql.trim();
+            String trimmed = maskedSql.trim();
             spanName = trimmed.length() > 60 ? trimmed.substring(0, 60) + "..." : trimmed;
         }
 
@@ -34,12 +38,12 @@ public final class JdbcStatementAdvice {
                 .startSpan();
 
         span.setAttribute("db.system", "sql");
-        if (sql != null) {
-            span.setAttribute("db.statement", sql);
+        if (maskedSql != null) {
+            span.setAttribute("db.query.text", maskedSql);
         }
 
         Scope scope = span.makeCurrent();
-        AgentLogger.debug("[JDBC] span started: " + sql);
+        AgentLogger.debug("[JDBC] span started: " + maskedSql);
         return new State(span, scope);
     }
 

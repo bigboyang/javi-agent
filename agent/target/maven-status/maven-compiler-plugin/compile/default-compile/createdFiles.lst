@@ -2,6 +2,7 @@ com/agent/common/utils/time/AnchoredClock.class
 com/agent/metric/Counter.class
 com/agent/logs/FileLogExporter.class
 com/agent/config/RemoteConfigHolder.class
+com/agent/common/ResourceInfo.class
 com/agent/trace/exporter/OtlpHttpSpanExporter.class
 com/agent/span/PropagatedSpan.class
 com/agent/metric/MetricData$Point.class
@@ -22,6 +23,7 @@ com/agent/instrumentation/HttpClientAdvice.class
 com/agent/span/SpanKind.class
 com/agent/metric/SdkMeterProvider.class
 com/agent/logs/TraceLogger$TraceFormatter.class
+com/agent/span/Context$SpanScope.class
 com/agent/span/SpanBuilder.class
 com/agent/sampler/ParentBasedSampler.class
 com/agent/common/utils/generator/RandomSupplier.class
@@ -54,6 +56,7 @@ com/agent/trace/processor/NoopSpanProcessor.class
 com/agent/instrumentation/KafkaProducerAdvice$State.class
 com/agent/span/TraceState.class
 com/agent/span/SpanStatus.class
+com/agent/propagation/Baggage$Builder.class
 com/agent/common/OtlpHttpSender$Builder.class
 com/agent/span/SdkSpan.class
 com/agent/instrumentation/ApacheHttpClientAdvice$State.class
@@ -68,8 +71,10 @@ com/agent/SimpleAgent.class
 com/agent/common/grpc/ProtoEncoder.class
 com/agent/span/AttributeKey$Type.class
 com/agent/logs/AgentLogger.class
+com/agent/propagation/W3CBaggagePropagator.class
 com/agent/span/SpanEvent.class
 com/agent/span/NoopSpan.class
+com/agent/metric/PrometheusMetricExporter.class
 com/agent/span/NoopSpanBuilder.class
 com/agent/instrumentation/KafkaConsumerAdvice.class
 com/agent/instrumentation/LogbackAdvice.class
@@ -86,9 +91,11 @@ com/agent/trace/processor/BatchSpanProcessor$Worker.class
 com/agent/span/Scope.class
 com/agent/instrumentation/ControllerMethodAdvice$State.class
 com/agent/common/grpc/GrpcSender$SendResult.class
+com/agent/propagation/Baggage.class
 com/agent/trace/processor/CompositeSpanProcessor.class
 com/agent/instrumentation/KafkaProducerAdvice.class
 com/agent/instrumentation/RabbitMQAdvice$Consumer.class
+com/agent/propagation/BaggagePropagator.class
 com/agent/common/JaviSdk.class
 com/agent/metric/MetricRegistry.class
 com/agent/trace/SdkTracer.class
@@ -110,6 +117,7 @@ com/agent/logs/LogLogger.class
 com/agent/span/SpanLink.class
 com/agent/trace/Tracer.class
 com/agent/common/grpc/GrpcSender.class
+com/agent/span/Context$BaggageScope.class
 com/agent/metric/FileMetricExporter.class
 com/agent/trace/SdkTracerProvider.class
 com/agent/metric/MetricData$MetricType.class
@@ -131,6 +139,7 @@ com/agent/logs/OtlpHttpLogExporter.class
 com/agent/propagation/ContextPropagators.class
 com/agent/propagation/MapTextMapSetter.class
 com/agent/metric/HikariMetricsCollector.class
+com/agent/metric/PrometheusMetricExporter$1.class
 com/agent/logs/LogBatchProcessor$Worker.class
 com/agent/propagation/NoopTextMapPropagator.class
 com/agent/span/AttributeKey.class

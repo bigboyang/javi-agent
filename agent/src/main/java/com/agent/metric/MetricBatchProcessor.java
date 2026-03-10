@@ -36,7 +36,14 @@ public final class MetricBatchProcessor {
 
     public void offer(MetricData record) {
         if (isStopped.get()) return;
-        queue.offer(record);
+        
+        // Backpressure: 큐가 가득 찼을 때의 처리 (Drop-newest 전략)
+        if (!queue.offer(record)) {
+            // 원격 설정에서 dropOnFull이 true이면 경고 없이 버리고, false면 로그를 남김 (거버넌스 연동)
+            if (!com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
+                AgentLogger.warn("[MetricProcessor] Backpressure: 큐가 가득 참 — 메트릭 데이터 폐기 (size=" + queue.size() + ")");
+            }
+        }
     }
 
     public CompletableFuture<Void> shutdown() {

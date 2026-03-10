@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.SqlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
@@ -42,18 +43,20 @@ public final class JdbcPreparedStatementAdvice {
                 if (str != null) sql = str;
             }
         }
-        String spanName = sql.length() > 60 ? sql.substring(0, 60) + "..." : sql;
         
+        // 민감한 리터럴 값 마스킹 (PII/보안 강화)
+        String maskedSql = SqlSanitizer.sanitize(sql);
+        String spanName = maskedSql.length() > 60 ? maskedSql.substring(0, 60) + "..." : maskedSql;
 
         Span span = tracer.spanBuilder(spanName)
                 .setSpanKind(SpanKind.CLIENT)
                 .startSpan();
 
         span.setAttribute("db.system", "sql");
-        span.setAttribute("db.statement", sql);
+        span.setAttribute("db.query.text", maskedSql);
 
         Scope scope = span.makeCurrent();
-        AgentLogger.debug("[JDBC-PS] span started: " + sql);
+        AgentLogger.debug("[JDBC-PS] span started: " + maskedSql);
         return new State(span, scope);
     }
 

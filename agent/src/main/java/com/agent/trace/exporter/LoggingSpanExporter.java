@@ -26,6 +26,7 @@ public final class LoggingSpanExporter implements SpanExporter {
             SpanContext context = span.getContext();
             String traceId = context == null ? "unknown" : context.getTraceId();
             String spanId = context == null ? "unknown" : context.getSpanId();
+            String traceFlags = context == null ? "00" : (context.getTraceFlags().isSampled() ? "01" : "00");
             String parentSpanId = context == null ? "unknown" : context.getParentSpanId();
             String kind = span.getKind() == null ? "INTERNAL" : span.getKind().name();
 
@@ -43,7 +44,7 @@ public final class LoggingSpanExporter implements SpanExporter {
             }
 
             // MDC 구조화 로그: TraceLogger → javi-traces.log
-            TraceLogger.trace(traceId, spanId, parentSpanId,
+            TraceLogger.trace(traceId, spanId, traceFlags, parentSpanId,
                     span.getName(), kind, durationMs, status, attrs);
 
             // 운영 디버그용 요약 로그: AgentLogger → javi-agent.log

@@ -22,6 +22,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
     private final int maxBatchSize;
     private final long exportIntervalMs;
     private final Thread workerThread;
+    private final java.util.concurrent.ScheduledExecutorService samplerResetExecutor;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
 
     // Tail Sampling 설정 캐싱
@@ -46,11 +47,12 @@ public final class BatchSpanProcessor implements SpanProcessor {
         this.clusterMinSamples = config.getClusterMinSamples();
 
         // 1분마다 클러스터 카운터 초기화 스케줄링 (주기적인 대표 샘플 확보용)
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+        this.samplerResetExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "javi-sampler-reset");
             t.setDaemon(true);
             return t;
-        }).scheduleAtFixedRate(clusterCounters::clear, 1, 1, java.util.concurrent.TimeUnit.MINUTES);
+        });
+        this.samplerResetExecutor.scheduleAtFixedRate(clusterCounters::clear, 1, 1, java.util.concurrent.TimeUnit.MINUTES);
 
         this.workerThread = new Thread(new Worker(), "javi-span-processor");
         this.workerThread.setDaemon(true);
@@ -162,6 +164,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
         if (!isShutdown.compareAndSet(false, true)) {
             return CompletableResultCode.ofSuccess();
         }
+        samplerResetExecutor.shutdownNow();
         workerThread.interrupt();
         try {
             // 종료 전 잔여 데이터 전송
@@ -181,7 +184,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
         List<Span> batch = new ArrayList<>(maxBatchSize);
         while (queue.drainTo(batch, maxBatchSize) > 0) {
             try {
-                exporter.export(new ArrayList<>(batch));
+                exporter.export(batch);
                 batch.clear();
             } catch (Throwable t) {
                 AgentLogger.error("[BatchSpanProcessor] Flush error: " + t.getMessage());
@@ -201,7 +204,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
                         batch.add(firstItem);
                         queue.drainTo(batch, maxBatchSize - 1);
                         
-                        exporter.export(new ArrayList<>(batch));
+                        exporter.export(batch);
                         batch.clear();
                     }
                 } catch (InterruptedException e) {

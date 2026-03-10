@@ -40,6 +40,9 @@ public final class ResourceInfo {
             m.put("host.name", "unknown");
         }
 
+        // service.instance.id (멀티 인스턴스 구분 필수)
+        m.put("service.instance.id", java.util.UUID.randomUUID().toString());
+
         // process.pid (Java 9+)
         try {
             m.put("process.pid", String.valueOf(ProcessHandle.current().pid()));

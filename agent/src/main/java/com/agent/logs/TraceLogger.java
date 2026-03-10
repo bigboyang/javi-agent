@@ -75,6 +75,7 @@ public final class TraceLogger {
      *
      * @param traceId     W3C trace ID
      * @param spanId      span ID
+     * @param traceFlags  W3C trace flags (샘플링 여부: 01=sampled, 00=not)
      * @param parentSpanId parent span ID (없으면 "0000000000000000")
      * @param operation   span 이름 (e.g. "GET /api/users")
      * @param kind        SpanKind (SERVER / CLIENT / INTERNAL 등)
@@ -82,13 +83,14 @@ public final class TraceLogger {
      * @param status      span 종료 상태 (OK / ERROR / UNSET)
      * @param attrs       span attributes 문자열 표현 (없으면 null)
      */
-    public static void trace(String traceId, String spanId, String parentSpanId,
-                             String operation, String kind, long durationMs,
-                             String status, String attrs) {
+    public static void trace(String traceId, String spanId, String traceFlags,
+                             String parentSpanId, String operation, String kind,
+                             long durationMs, String status, String attrs) {
         StringBuilder mdc = new StringBuilder();
         mdc.append("service=").append(serviceName)
            .append(" traceId=").append(traceId)
            .append(" spanId=").append(spanId)
+           .append(" traceFlags=").append(traceFlags)
            .append(" parentSpanId=").append(parentSpanId)
            .append(" operation=").append(operation)
            .append(" kind=").append(kind)
