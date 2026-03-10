@@ -15,11 +15,13 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/generator/RandomSupplier.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/PropagatedSpan.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerConfig.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/OtlpHttpMetricExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/TraceState.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/TraceContextPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/NoopSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/AlwaysOnSampler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/LogBatchProcessor.java
+/Users/kkc/APM/agent/src/main/java/com/agent/common/OtlpHttpSender.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/core/TemporaryBuffers.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/Gauge.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/AdaptiveSampler.java
@@ -29,6 +31,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/KafkaProducerAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/AttributeKey.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerBuilder.java
+/Users/kkc/APM/agent/src/main/java/com/agent/common/grpc/GrpcSender.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/ControllerMethodAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/JvmMetricsCollector.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/generator/RandomIdGenerator.java
@@ -37,17 +40,22 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricData.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/AlwaysOffSampler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricKey.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/OtlpGrpcMetricExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/SpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/MapTextMapGetter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/SdkTracer.java
+/Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/OtlpGrpcSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/Histogram.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/NoopSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/sdkLog/ApiUsageLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanLink.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/LogbackAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/Context.java
+/Users/kkc/APM/agent/src/main/java/com/agent/common/grpc/ProtoEncoder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/AppLogCollector.java
+/Users/kkc/APM/agent/src/main/java/com/agent/logs/OtlpGrpcLogExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/NoopTracerBuilder.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/CompositeMetricExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcPreparedStatementAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/SpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/NoopSpan.java
@@ -81,6 +89,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/Propagation.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/Tracer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/HttpRequestExecuteAdvice.java
+/Users/kkc/APM/agent/src/main/java/com/agent/logs/OtlpHttpLogExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/Sampler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SdkSpanBuilder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TraceId.java
@@ -104,7 +113,6 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanLimits.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SdkSpan.java
-/Users/kkc/APM/agent/src/main/java/com/agent/config/AgentConfigServer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanKind.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanContext.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/Scope.java
@@ -113,4 +121,5 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/TextMapSetter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/Clock.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricLogger.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/HikariMetricsCollector.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/LogLogger.java

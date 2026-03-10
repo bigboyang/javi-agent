@@ -16,6 +16,7 @@ import com.agent.instrumentation.RabbitMQAdvice;
 import com.agent.instrumentation.RedisLettuceAdvice;
 import com.agent.logs.AgentLogger;
 import com.agent.logs.AppLogCollector;
+import com.agent.metric.HikariMetricsCollector;
 import com.agent.metric.JvmMetricsCollector;
 import java.lang.instrument.Instrumentation;
 import java.util.concurrent.TimeUnit;
@@ -83,6 +84,7 @@ public class SimpleAgent {
         installLog4j2Instrumentation(inst);
         AppLogCollector.install();
         JvmMetricsCollector.start();
+        HikariMetricsCollector.start();
 
         AgentLogger.info("모든 계측이 등록되었습니다.");
         AgentLogger.info("이제 애플리케이션이 시작됩니다...");
@@ -91,6 +93,7 @@ public class SimpleAgent {
             AgentLogger.info("Shutdown: 남은 span/metric/log flush 중...");
             try {
                 JvmMetricsCollector.stop();
+                HikariMetricsCollector.stop();
                 AgentRuntime.provider().forceFlush().join(5, TimeUnit.SECONDS);
                 AgentRuntime.provider().shutdown().join(3, TimeUnit.SECONDS);
             } catch (Exception e) {

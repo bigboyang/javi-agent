@@ -18,8 +18,9 @@ public final class MetricRegistry {
 
     private static final MetricRegistry INSTANCE = new MetricRegistry();
 
-    private final ConcurrentHashMap<MetricKey, Counter> counters = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<MetricKey, Gauge> gauges = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MetricKey, Counter>   counters   = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MetricKey, Gauge>     gauges     = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Histogram>    histograms = new ConcurrentHashMap<>();
 
     private MetricRegistry() {}
 
@@ -37,6 +38,11 @@ public final class MetricRegistry {
     public Gauge gauge(String name, Map<String, String> attributes) {
         MetricKey key = new MetricKey(name, attributes);
         return gauges.computeIfAbsent(key, k -> new Gauge(name, k.getAttributes()));
+    }
+
+    /** 히스토그램 획득 또는 생성 (이름 기반, 속성 없음). */
+    public Histogram histogram(String name) {
+        return histograms.computeIfAbsent(name, Histogram::new);
     }
 
     /** 
@@ -74,6 +80,27 @@ public final class MetricRegistry {
                     entry.getKey(), "", "value", MetricData.MetricType.GAUGE, points
             ));
         }
+
+        // 3. Histogram들을 count/sum/min/max 4개 메트릭으로 분해
+        Instant now = Instant.now();
+        for (Histogram hist : histograms.values()) {
+            long count = hist.getCount();
+            if (count == 0) continue;
+
+            List<MetricData.Point> countPt = Collections.singletonList(
+                    new MetricData.Point(count, Collections.emptyMap(), now));
+            List<MetricData.Point> sumPt = Collections.singletonList(
+                    new MetricData.Point(hist.getSum(), Collections.emptyMap(), now));
+            List<MetricData.Point> minPt = Collections.singletonList(
+                    new MetricData.Point(hist.getMin(), Collections.emptyMap(), now));
+            List<MetricData.Point> maxPt = Collections.singletonList(
+                    new MetricData.Point(hist.getMax(), Collections.emptyMap(), now));
+
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".count",  "", "count", MetricData.MetricType.SUM,   countPt));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".sum",    "", "1",     MetricData.MetricType.SUM,   sumPt));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".min",    "", "1",     MetricData.MetricType.GAUGE, minPt));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".max",    "", "1",     MetricData.MetricType.GAUGE, maxPt));
+        }
     }
 
     public Map<MetricKey, Counter> counters() {
@@ -84,8 +111,7 @@ public final class MetricRegistry {
         return Collections.unmodifiableMap(gauges);
     }
 
-    // Histogram도 필요할 수 있으므로 No-op 맵이라도 반환 (에러 방지용)
-    public Map<MetricKey, Histogram> histograms() {
-        return Collections.emptyMap();
+    public Map<String, Histogram> histograms() {
+        return Collections.unmodifiableMap(histograms);
     }
 }

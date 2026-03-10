@@ -18,10 +18,13 @@ public final class AgentConfig {
     private final java.util.List<String> criticalUrls;
     private final int clusterMinSamples;
     private final long targetSps;
+    private final String exporterProtocol;
+    private final String grpcEndpoint;
 
-    private AgentConfig(String exporterEndpoint, String serviceName, double sampleRate, 
-                        boolean tailSamplingEnabled, long slowThresholdMs, 
-                        java.util.List<String> criticalUrls, int clusterMinSamples, long targetSps) {
+    private AgentConfig(String exporterEndpoint, String serviceName, double sampleRate,
+                        boolean tailSamplingEnabled, long slowThresholdMs,
+                        java.util.List<String> criticalUrls, int clusterMinSamples, long targetSps,
+                        String exporterProtocol, String grpcEndpoint) {
         this.exporterEndpoint = exporterEndpoint;
         this.serviceName = serviceName;
         this.sampleRate = sampleRate;
@@ -30,16 +33,18 @@ public final class AgentConfig {
         this.criticalUrls = criticalUrls;
         this.clusterMinSamples = clusterMinSamples;
         this.targetSps = targetSps;
+        this.exporterProtocol = exporterProtocol;
+        this.grpcEndpoint = grpcEndpoint;
     }
 
     public static AgentConfig load() {
         String endpoint = get("JAVI_EXPORTER_ENDPOINT", "javi.exporter.endpoint", DEFAULT_ENDPOINT);
         String service = get("JAVI_SERVICE_NAME", "javi.service.name", DEFAULT_SERVICE_NAME);
         double rate = parseDouble(get("JAVI_SAMPLE_RATE", "javi.sample.rate", String.valueOf(DEFAULT_SAMPLE_RATE)));
-        
+
         boolean tailEnabled = Boolean.parseBoolean(get("JAVI_TAIL_SAMPLING_ENABLED", "javi.tail.sampling.enabled", "true"));
         long slowThreshold = parseLong(get("JAVI_SLOW_THRESHOLD_MS", "javi.slow.threshold.ms", "500"));
-        
+
         String urlsRaw = get("JAVI_CRITICAL_URLS", "javi.critical.urls", "");
         java.util.List<String> urls = java.util.Arrays.stream(urlsRaw.split(","))
                 .map(String::trim)
@@ -48,12 +53,26 @@ public final class AgentConfig {
 
         int minSamples = Integer.parseInt(get("JAVI_CLUSTER_MIN_SAMPLES", "javi.cluster.min.samples", "5"));
         long targetSps = parseLong(get("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
-        
-        return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples, targetSps);
+
+        String protocol = get("JAVI_EXPORTER_PROTOCOL", "javi.exporter.protocol", "http");
+        String grpcEndpoint = get("JAVI_GRPC_ENDPOINT", "javi.grpc.endpoint", "http://localhost:4317");
+
+        return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,
+                targetSps, protocol, grpcEndpoint);
     }
 
     public long getTargetSps() {
         return targetSps;
+    }
+
+    /** 익스포터 프로토콜. "grpc" 또는 "http" (기본값: "http"). */
+    public String getExporterProtocol() {
+        return exporterProtocol;
+    }
+
+    /** gRPC Collector 기본 URL (기본값: http://localhost:4317). */
+    public String getGrpcEndpoint() {
+        return grpcEndpoint;
     }
 
     public int getClusterMinSamples() {
