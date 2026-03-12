@@ -195,7 +195,7 @@ public final class RemoteConfigPoller {
 
     /** headSampleRate에 서비스별 가중치를 곱해 유효 샘플링 비율을 계산한다. */
     private static double computeEffectiveRate(RemoteConfig config) {
-        String serviceName = AgentConfig.load().getServiceName();
+        String serviceName = AgentConfig.get().getServiceName();
         Double weight = config.getServiceWeight().get(serviceName);
         if (weight == null) return config.getHeadSampleRate();
         return Math.max(0.0, Math.min(1.0, config.getHeadSampleRate() * weight));

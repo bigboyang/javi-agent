@@ -83,14 +83,18 @@ public final class RemoteConfig {
         this.retryCount = retryCount;
     }
 
-    /** 기본값으로 생성 (원격 설정 없을 때 사용). */
+    /** 기본값으로 생성 (원격 설정 없을 때 사용). AgentConfig의 로컬 설정을 기본 베이스로 삼는다. */
     public static RemoteConfig defaults() {
+        AgentConfig local = AgentConfig.get();
         Set<String> defaultTailPolicy = new HashSet<>();
-        defaultTailPolicy.add("error");
-        defaultTailPolicy.add("slow");
-        defaultTailPolicy.add("cluster");
+        if (local.isTailSamplingEnabled()) {
+            defaultTailPolicy.add("error");
+            defaultTailPolicy.add("slow");
+            defaultTailPolicy.add("cluster");
+        }
+
         return new RemoteConfig(
-                1.0, defaultTailPolicy, Collections.emptyMap(), 0L,
+                local.getSampleRate(), defaultTailPolicy, Collections.emptyMap(), local.getTargetSps(),
                 true, "all", Collections.emptySet(), Collections.emptyList(),
                 false, Collections.emptySet(), true,
                 512, 5000L, 3

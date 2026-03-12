@@ -43,7 +43,7 @@ import java.lang.reflect.Method;
  */
 public final class ScheduledTaskAdvice {
 
-    private static final String SERVICE_NAME = com.agent.config.AgentConfig.load().getServiceName();
+    private static final String SERVICE_NAME = com.agent.config.AgentConfig.get().getServiceName();
 
     // ScheduledMethodRunnable 필드 캐시
     private static volatile Field TARGET_FIELD = null;

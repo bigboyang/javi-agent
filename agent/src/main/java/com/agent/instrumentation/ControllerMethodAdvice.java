@@ -22,7 +22,7 @@ import org.slf4j.MDC;
  */
 public final class ControllerMethodAdvice {
 
-    private static final String SERVICE_NAME = com.agent.config.AgentConfig.load().getServiceName();
+    private static final String SERVICE_NAME = com.agent.config.AgentConfig.get().getServiceName();
     // Spring MVC가 매칭된 라우트 패턴을 request attribute에 저장하는 키
     private static final String BEST_MATCHING_PATTERN_ATTR =
             "org.springframework.web.servlet.HandlerMapping.bestMatchingPattern";

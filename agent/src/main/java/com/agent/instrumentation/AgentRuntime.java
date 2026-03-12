@@ -37,7 +37,7 @@ public final class AgentRuntime {
     private static final Tracer TRACER;
 
     static {
-        AgentConfig config = AgentConfig.load();
+        AgentConfig config = AgentConfig.get();
         String protocol = config.getExporterProtocol().toLowerCase();
 
         SpanExporter spanExporter;
