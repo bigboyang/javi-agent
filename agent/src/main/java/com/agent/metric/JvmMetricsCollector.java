@@ -16,6 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import javax.management.NotificationEmitter;
+import javax.management.NotificationListener;
+import javax.management.openmbean.CompositeData;
 
 /**
  * JMX를 통해 주기적으로 JVM 메트릭을 수집해 MetricRegistry에 기록한다.
@@ -24,7 +27,8 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>jvm.memory.used / committed / limit (heap/nonheap, bytes)</li>
  *   <li>jvm.memory.pool.used / committed / limit (풀별, bytes)</li>
- *   <li>jvm.gc.duration_ms / count (GC 컬렉터별)</li>
+ *   <li>jvm.gc.collections.count / elapsed (누적 값, SUM)</li>
+ *   <li>jvm.gc.duration (개별 pause time, HISTOGRAM)</li>
  *   <li>jvm.threads.count / peak / daemon</li>
  *   <li>jvm.classes.loaded / unloaded</li>
  *   <li>jvm.cpu.process_load (permille, 0~1000)</li>
@@ -51,7 +55,46 @@ public final class JvmMetricsCollector {
             return t;
         });
         executor.scheduleAtFixedRate(JvmMetricsCollector::collect, 0, 15, TimeUnit.SECONDS);
+        
+        registerGcNotificationListener();
+        
         AgentLogger.info("JvmMetricsCollector 시작 (15초 간격)");
+    }
+
+    private static void registerGcNotificationListener() {
+        try {
+            List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
+            for (GarbageCollectorMXBean gcBean : gcBeans) {
+                if (gcBean instanceof NotificationEmitter) {
+                    NotificationEmitter emitter = (NotificationEmitter) gcBean;
+                    NotificationListener listener = (notification, handback) -> {
+                        if (notification.getType().equals("com.sun.management.gc.notification")) {
+                            try {
+                                // GarbageCollectionNotificationInfo info = GarbageCollectionNotificationInfo.from((CompositeData) notification.getUserData());
+                                // 리플렉션 없이 CompositeData에서 직접 필요한 필드 추출 (호환성 상향)
+                                CompositeData cd = (CompositeData) notification.getUserData();
+                                CompositeData gcInfo = (CompositeData) cd.get("gcInfo");
+                                long duration = (long) gcInfo.get("duration");
+                                String gcName = (String) cd.get("gcName");
+                                String gcAction = (String) cd.get("gcAction");
+
+                                Map<String, String> tags = new HashMap<>(4);
+                                tags.put("gc", gcName);
+                                tags.put("gc.action", gcAction);
+                                tags.put("gc.type", classifyGc(gcName));
+
+                                // 개별 GC pause time을 히스토그램으로 기록 (OTel 표준)
+                                MetricRegistry.get().histogram("jvm.gc.duration", "Duration of JVM garbage collection pauses", "ms", tags)
+                                        .record(duration);
+                            } catch (Throwable ignored) {}
+                        }
+                    };
+                    emitter.addNotificationListener(listener, null, null);
+                }
+            }
+        } catch (Throwable t) {
+            AgentLogger.debug("GC NotificationListener 등록 실패: " + t.getMessage());
+        }
     }
 
     public static void stop() {
@@ -87,15 +130,15 @@ public final class JvmMetricsCollector {
         MetricRegistry reg = MetricRegistry.get();
 
         MemoryUsage heap = memory.getHeapMemoryUsage();
-        reg.gauge("jvm.memory.used", attr("area", "heap")).set(heap.getUsed());
-        reg.gauge("jvm.memory.committed", attr("area", "heap")).set(heap.getCommitted());
+        reg.gauge("jvm.memory.used", "Heap memory used", "By", attr("area", "heap")).set(heap.getUsed());
+        reg.gauge("jvm.memory.committed", "Heap memory committed", "By", attr("area", "heap")).set(heap.getCommitted());
         if (heap.getMax() > 0) {
-            reg.gauge("jvm.memory.limit", attr("area", "heap")).set(heap.getMax());
+            reg.gauge("jvm.memory.limit", "Heap memory limit", "By", attr("area", "heap")).set(heap.getMax());
         }
 
         MemoryUsage nonheap = memory.getNonHeapMemoryUsage();
-        reg.gauge("jvm.memory.used", attr("area", "nonheap")).set(nonheap.getUsed());
-        reg.gauge("jvm.memory.committed", attr("area", "nonheap")).set(nonheap.getCommitted());
+        reg.gauge("jvm.memory.used", "Non-heap memory used", "By", attr("area", "nonheap")).set(nonheap.getUsed());
+        reg.gauge("jvm.memory.committed", "Non-heap memory committed", "By", attr("area", "nonheap")).set(nonheap.getCommitted());
     }
 
     private static void collectMemoryPools() {
@@ -107,10 +150,10 @@ public final class JvmMetricsCollector {
             if (usage == null) continue;
 
             Map<String, String> tags = attr("pool", poolName);
-            reg.gauge("jvm.memory.pool.used", tags).set(usage.getUsed());
-            reg.gauge("jvm.memory.pool.committed", tags).set(usage.getCommitted());
+            reg.gauge("jvm.memory.pool.used", "Memory pool used", "By", tags).set(usage.getUsed());
+            reg.gauge("jvm.memory.pool.committed", "Memory pool committed", "By", tags).set(usage.getCommitted());
             if (usage.getMax() > 0) {
-                reg.gauge("jvm.memory.pool.limit", tags).set(usage.getMax());
+                reg.gauge("jvm.memory.pool.limit", "Memory pool limit", "By", tags).set(usage.getMax());
             }
         }
     }
@@ -129,20 +172,19 @@ public final class JvmMetricsCollector {
             tags.put("gc", gcName);
             tags.put("gc.type", gcType);
 
-            // 버그 수정: Gauge → Counter (단조 증가 누적값은 OTel SUM/Monotonic이 맞음)
-            // delta를 계산해 Counter에 add → Counter 내부 합산값 = JVM 시작 이후 누적값
+            // OTel 표준 메트릭 이름으로 변경: jvm.gc.count -> jvm.gc.collections.count
+            // jvm.gc.duration_ms -> jvm.gc.collections.elapsed
             long prevCount   = lastGcCount.getOrDefault(gcName, 0L);
             long prevElapsed = lastGcElapsed.getOrDefault(gcName, 0L);
             long deltaCount   = Math.max(0L, count   - prevCount);
             long deltaElapsed = Math.max(0L, (elapsed >= 0 ? elapsed : 0) - prevElapsed);
 
             if (deltaCount > 0) {
-                reg.counter("jvm.gc.count",       tags).add(deltaCount);
-                reg.counter("jvm.gc.duration_ms", tags).add(deltaElapsed);
+                reg.counter("jvm.gc.collections.count", "Total number of GC collections", "1", tags).add(deltaCount);
+                reg.counter("jvm.gc.collections.elapsed", "Total time spent in GC", "ms", tags).add(deltaElapsed);
                 lastGcCount.put(gcName, count);
                 lastGcElapsed.put(gcName, elapsed >= 0 ? elapsed : 0);
             } else if (!lastGcCount.containsKey(gcName)) {
-                // 최초 등록 — 현재 값을 기준점으로 설정 (JVM 시작 시 발생한 GC 제외)
                 lastGcCount.put(gcName, count);
                 lastGcElapsed.put(gcName, elapsed >= 0 ? elapsed : 0);
             }
@@ -164,16 +206,16 @@ public final class JvmMetricsCollector {
     private static void collectThreads() {
         ThreadMXBean threads = ManagementFactory.getThreadMXBean();
         MetricRegistry reg = MetricRegistry.get();
-        reg.gauge("jvm.threads.count", Collections.emptyMap()).set(threads.getThreadCount());
-        reg.gauge("jvm.threads.peak", Collections.emptyMap()).set(threads.getPeakThreadCount());
-        reg.gauge("jvm.threads.daemon", Collections.emptyMap()).set(threads.getDaemonThreadCount());
+        reg.gauge("jvm.threads.count", "Current thread count", "1", Collections.emptyMap()).set(threads.getThreadCount());
+        reg.gauge("jvm.threads.peak", "Peak thread count", "1", Collections.emptyMap()).set(threads.getPeakThreadCount());
+        reg.gauge("jvm.threads.daemon", "Daemon thread count", "1", Collections.emptyMap()).set(threads.getDaemonThreadCount());
     }
 
     private static void collectClasses() {
         ClassLoadingMXBean cl = ManagementFactory.getClassLoadingMXBean();
         MetricRegistry reg = MetricRegistry.get();
-        reg.gauge("jvm.classes.loaded", Collections.emptyMap()).set(cl.getLoadedClassCount());
-        reg.gauge("jvm.classes.unloaded", Collections.emptyMap()).set(cl.getUnloadedClassCount());
+        reg.gauge("jvm.classes.loaded", "Total classes loaded", "1", Collections.emptyMap()).set(cl.getLoadedClassCount());
+        reg.gauge("jvm.classes.unloaded", "Total classes unloaded", "1", Collections.emptyMap()).set(cl.getUnloadedClassCount());
     }
 
     private static void collectCpu() {
@@ -183,7 +225,7 @@ public final class JvmMetricsCollector {
             processCpuLoad.setAccessible(true);
             double cpuLoad = (double) processCpuLoad.invoke(os);
             if (cpuLoad >= 0) {
-                MetricRegistry.get().gauge("jvm.cpu.process_load", Collections.emptyMap())
+                MetricRegistry.get().gauge("jvm.cpu.process_load", "Process CPU load", "1", Collections.emptyMap())
                         .set((long) (cpuLoad * 1000)); // permille (0~1000)
             }
 
@@ -199,7 +241,7 @@ public final class JvmMetricsCollector {
                 systemLoad = (double) getSystemCpuLoad.invoke(os);
             }
             if (systemLoad >= 0) {
-                MetricRegistry.get().gauge("system.cpu.load", Collections.emptyMap())
+                MetricRegistry.get().gauge("system.cpu.load", "System CPU load", "1", Collections.emptyMap())
                         .set((long) (systemLoad * 1000));
             }
         } catch (Throwable ignored) {}
@@ -218,8 +260,8 @@ public final class JvmMetricsCollector {
             long total = (long) totalMemory.invoke(os);
 
             MetricRegistry reg = MetricRegistry.get();
-            reg.gauge("system.memory.free", Collections.emptyMap()).set(free);
-            reg.gauge("system.memory.total", Collections.emptyMap()).set(total);
+            reg.gauge("system.memory.free", "Free physical memory", "By", Collections.emptyMap()).set(free);
+            reg.gauge("system.memory.total", "Total physical memory", "By", Collections.emptyMap()).set(total);
         } catch (Throwable ignored) {}
     }
 

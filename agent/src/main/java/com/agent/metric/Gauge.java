@@ -8,11 +8,15 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class Gauge {
     private final String name;
+    private final String description;
+    private final String unit;
     private final Map<String, String> attributes;
     private final AtomicLong value = new AtomicLong(0);
 
-    Gauge(String name, Map<String, String> attributes) {
+    Gauge(String name, String description, String unit, Map<String, String> attributes) {
         this.name = name;
+        this.description = description != null ? description : "";
+        this.unit = unit != null ? unit : "1";
         this.attributes = attributes;
     }
 
@@ -20,5 +24,7 @@ public final class Gauge {
     public long get() { return value.get(); }
     
     public String getName() { return name; }
+    public String getDescription() { return description; }
+    public String getUnit() { return unit; }
     public Map<String, String> getAttributes() { return attributes; }
 }

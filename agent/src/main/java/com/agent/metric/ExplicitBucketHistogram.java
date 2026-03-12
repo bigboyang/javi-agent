@@ -41,6 +41,8 @@ public final class ExplicitBucketHistogram {
             {1, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 10000};
 
     private final String name;
+    private final String description;
+    private final String unit;
     private final Map<String, String> attributes;
     private final long[] boundaries;
     private final LongAdder[] bucketCounts;
@@ -63,12 +65,18 @@ public final class ExplicitBucketHistogram {
     private final AtomicLong[] exemplarObsCount;
 
     public ExplicitBucketHistogram(String name, Map<String, String> attributes) {
-        this(name, attributes, DEFAULT_BOUNDARIES);
+        this(name, "", "ms", attributes, DEFAULT_BOUNDARIES);
+    }
+
+    public ExplicitBucketHistogram(String name, String description, String unit, Map<String, String> attributes) {
+        this(name, description, unit, attributes, DEFAULT_BOUNDARIES);
     }
 
     @SuppressWarnings("unchecked")
-    public ExplicitBucketHistogram(String name, Map<String, String> attributes, long[] boundaries) {
+    public ExplicitBucketHistogram(String name, String description, String unit, Map<String, String> attributes, long[] boundaries) {
         this.name       = name;
+        this.description = description != null ? description : "";
+        this.unit       = unit != null ? unit : "1";
         this.attributes = attributes != null ? attributes : Collections.emptyMap();
         this.boundaries = boundaries;
         this.bucketCounts = new LongAdder[boundaries.length];
@@ -217,6 +225,8 @@ public final class ExplicitBucketHistogram {
     public long                getMin()        { long v = minValue.get(); return v == Long.MAX_VALUE ? 0 : v; }
     public long                getMax()        { long v = maxValue.get(); return v == Long.MIN_VALUE ? 0 : v; }
     public String              getName()       { return name; }
+    public String              getDescription(){ return description; }
+    public String              getUnit()       { return unit; }
     public Map<String, String> getAttributes() { return attributes; }
 
     private void updateMin(long value) {

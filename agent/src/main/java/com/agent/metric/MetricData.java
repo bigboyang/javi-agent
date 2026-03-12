@@ -115,6 +115,8 @@ public final class MetricData {
     // ---- Getters ----
 
     public String                    getName()            { return name; }
+    public String                    getDescription()     { return description; }
+    public String                    getUnit()            { return unit; }
     public MetricType                getType()            { return type; }
     public Collection<Point>         getPoints()          { return points; }
     public Collection<HistogramPoint> getHistogramPoints(){ return histogramPoints; }

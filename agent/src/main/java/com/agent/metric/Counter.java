@@ -8,11 +8,15 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public final class Counter {
     private final String name;
+    private final String description;
+    private final String unit;
     private final Map<String, String> attributes;
     private final LongAdder value = new LongAdder();
 
-    Counter(String name, Map<String, String> attributes) {
+    Counter(String name, String description, String unit, Map<String, String> attributes) {
         this.name = name;
+        this.description = description != null ? description : "";
+        this.unit = unit != null ? unit : "1";
         this.attributes = attributes;
     }
 
@@ -21,5 +25,7 @@ public final class Counter {
     public long get() { return value.sum(); }
     
     public String getName() { return name; }
+    public String getDescription() { return description; }
+    public String getUnit() { return unit; }
     public Map<String, String> getAttributes() { return attributes; }
 }

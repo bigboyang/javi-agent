@@ -189,9 +189,9 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         sb.append("{");
         sb.append("\"name\":\"").append(escapeJson(metric.getName())).append("\",");
 
-        // description / unit — MetricData가 getter를 노출하지 않을 경우 빈 문자열로 안전 처리
-        sb.append("\"description\":\"\",");
-        sb.append("\"unit\":\"\",");
+        // description / unit
+        sb.append("\"description\":\"").append(escapeJson(metric.getDescription())).append("\",");
+        sb.append("\"unit\":\"").append(escapeJson(metric.getUnit())).append("\",");
 
         // MetricType에 따라 다른 JSON 키 사용
         MetricData.MetricType type = metric.getType();
@@ -215,11 +215,15 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
                 break;
 
             case HISTOGRAM:
-                // 단순화: Point.value를 sum으로 사용, count=1, bounds/buckets 생략
                 sb.append("\"histogram\":{");
                 sb.append("\"aggregationTemporality\":").append(TEMPORALITY_CUMULATIVE).append(",");
                 sb.append("\"dataPoints\":[");
-                appendHistogramDataPoints(sb, metric.getPoints());
+                if (metric.getHistogramPoints() != null && !metric.getHistogramPoints().isEmpty()) {
+                    appendExplicitHistogramDataPoints(sb, metric.getHistogramPoints());
+                } else {
+                    // 하위 호환: Point.value를 sum으로 사용, count=1 처리
+                    appendHistogramDataPointsSimple(sb, metric.getPoints());
+                }
                 sb.append("]}");
                 break;
 
@@ -256,14 +260,59 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
             }
 
             // OTLP NumberDataPoint: asDouble 또는 asInt
-            // double 범위 이내이면 asDouble 사용
             sb.append("\"asDouble\":").append(point.getValue());
             sb.append("}");
         }
     }
 
+    /** ExplicitBucketHistogram 데이터 포인트 직렬화. */
+    private static void appendExplicitHistogramDataPoints(StringBuilder sb, Collection<MetricData.HistogramPoint> points) {
+        boolean first = true;
+        for (MetricData.HistogramPoint hp : points) {
+            if (hp == null) continue;
+            if (!first) sb.append(",");
+            first = false;
+
+            sb.append("{");
+            appendPointAttributes(sb, hp.getAttributes());
+            sb.append(",");
+
+            if (hp.getTimestamp() != null) {
+                long nanos = hp.getTimestamp().getEpochSecond() * 1_000_000_000L
+                           + hp.getTimestamp().getNano();
+                sb.append("\"timeUnixNano\":\"").append(nanos).append("\",");
+            } else {
+                sb.append("\"timeUnixNano\":\"0\",");
+            }
+
+            sb.append("\"count\":\"").append(hp.getCount()).append("\",");
+            sb.append("\"sum\":").append(hp.getSum()).append(",");
+            if (hp.getMin() != Double.MAX_VALUE) sb.append("\"min\":").append(hp.getMin()).append(",");
+            if (hp.getMax() != Double.MIN_VALUE) sb.append("\"max\":").append(hp.getMax()).append(",");
+
+            // explicitBounds
+            sb.append("\"explicitBounds\":[");
+            double[] bounds = hp.getBoundaries();
+            for (int i = 0; i < bounds.length; i++) {
+                if (i > 0) sb.append(",");
+                sb.append(bounds[i]);
+            }
+            sb.append("],");
+
+            // bucketCounts
+            sb.append("\"bucketCounts\":[");
+            long[] counts = hp.getBucketCounts();
+            for (int i = 0; i < counts.length; i++) {
+                if (i > 0) sb.append(",");
+                sb.append("\"").append(counts[i]).append("\"");
+            }
+            sb.append("]");
+            sb.append("}");
+        }
+    }
+
     /** HistogramDataPoint 직렬화 — 단순 버전 (count=1, sum=value, 버킷 없음). */
-    private static void appendHistogramDataPoints(StringBuilder sb, Collection<MetricData.Point> points) {
+    private static void appendHistogramDataPointsSimple(StringBuilder sb, Collection<MetricData.Point> points) {
         boolean first = true;
         for (MetricData.Point point : points) {
             if (point == null) continue;
@@ -283,10 +332,7 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
             }
 
             sb.append("\"count\":\"1\",");
-            sb.append("\"sum\":").append(point.getValue()).append(",");
-            // explicitBounds, bucketCounts 없이 전송하면 Collector가 graceful하게 처리
-            sb.append("\"explicitBounds\":[],");
-            sb.append("\"bucketCounts\":[\"1\"]");
+            sb.append("\"sum\":").append(point.getValue());
             sb.append("}");
         }
     }

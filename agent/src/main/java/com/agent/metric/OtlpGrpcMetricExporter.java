@@ -214,6 +214,12 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
     private static byte[] encodeMetric(MetricData metric) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(256);
         ProtoEncoder.writeString(out, FN_METRIC_NAME, metric.getName());
+        if (metric.getDescription() != null && !metric.getDescription().isEmpty()) {
+            ProtoEncoder.writeString(out, FN_METRIC_DESCRIPTION, metric.getDescription());
+        }
+        if (metric.getUnit() != null && !metric.getUnit().isEmpty()) {
+            ProtoEncoder.writeString(out, FN_METRIC_UNIT, metric.getUnit());
+        }
 
         MetricData.MetricType type = metric.getType();
         if (type == null) type = MetricData.MetricType.GAUGE;
