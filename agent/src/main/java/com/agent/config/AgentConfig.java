@@ -20,11 +20,14 @@ public final class AgentConfig {
     private final long targetSps;
     private final String exporterProtocol;
     private final String grpcEndpoint;
+    private final long tailSamplingTtlMs;
+    private final int tailSamplingMaxPendingTraces;
 
     private AgentConfig(String exporterEndpoint, String serviceName, double sampleRate,
                         boolean tailSamplingEnabled, long slowThresholdMs,
                         java.util.List<String> criticalUrls, int clusterMinSamples, long targetSps,
-                        String exporterProtocol, String grpcEndpoint) {
+                        String exporterProtocol, String grpcEndpoint,
+                        long tailSamplingTtlMs, int tailSamplingMaxPendingTraces) {
         this.exporterEndpoint = exporterEndpoint;
         this.serviceName = serviceName;
         this.sampleRate = sampleRate;
@@ -35,6 +38,8 @@ public final class AgentConfig {
         this.targetSps = targetSps;
         this.exporterProtocol = exporterProtocol;
         this.grpcEndpoint = grpcEndpoint;
+        this.tailSamplingTtlMs = tailSamplingTtlMs;
+        this.tailSamplingMaxPendingTraces = tailSamplingMaxPendingTraces;
     }
 
     public static AgentConfig load() {
@@ -55,10 +60,13 @@ public final class AgentConfig {
         long targetSps = parseLong(get("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
 
         String protocol = get("JAVI_EXPORTER_PROTOCOL", "javi.exporter.protocol", "grpc");
-        String grpcEndpoint = get("JAVI_GRPC_ENDPOINT", "javi.grpc.endpoint", "http://localhost:4317");
+        String grpcEndpoint = get("JAVI_GRPC_ENDPOINT", "javi.grpc.endpoint", "http://localhost:4318");
+
+        long tailTtlMs = parseLong(get("JAVI_TAIL_SAMPLING_TTL_MS", "javi.tail.sampling.ttl.ms", "30000"));
+        int tailMaxPending = Integer.parseInt(get("JAVI_TAIL_SAMPLING_MAX_PENDING", "javi.tail.sampling.max.pending", "10000"));
 
         return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,
-                targetSps, protocol, grpcEndpoint);
+                targetSps, protocol, grpcEndpoint, tailTtlMs, tailMaxPending);
     }
 
     public long getTargetSps() {
@@ -101,6 +109,14 @@ public final class AgentConfig {
 
     public long getSlowThresholdMs() {
         return slowThresholdMs;
+    }
+
+    public long getTailSamplingTtlMs() {
+        return tailSamplingTtlMs;
+    }
+
+    public int getTailSamplingMaxPendingTraces() {
+        return tailSamplingMaxPendingTraces;
     }
 
     private static String get(String envKey, String propKey, String defaultValue) {

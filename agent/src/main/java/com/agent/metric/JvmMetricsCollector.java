@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -34,6 +35,10 @@ import java.util.concurrent.TimeUnit;
 public final class JvmMetricsCollector {
 
     private static volatile ScheduledExecutorService executor;
+
+    // GC 직전 값을 보관 → delta를 Counter에 add (누적 → SUM/Monotonic 전환)
+    private static final ConcurrentHashMap<String, Long> lastGcCount   = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> lastGcElapsed = new ConcurrentHashMap<>();
 
     private JvmMetricsCollector() {}
 
@@ -114,14 +119,46 @@ public final class JvmMetricsCollector {
         MetricRegistry reg = MetricRegistry.get();
         List<GarbageCollectorMXBean> gcBeans = ManagementFactory.getGarbageCollectorMXBeans();
         for (GarbageCollectorMXBean gc : gcBeans) {
-            long count = gc.getCollectionCount();
+            long count   = gc.getCollectionCount();
             long elapsed = gc.getCollectionTime();
             if (count < 0) continue;
 
-            Map<String, String> tags = attr("gc", gc.getName());
-            reg.gauge("jvm.gc.count", tags).set(count);
-            reg.gauge("jvm.gc.duration_ms", tags).set(elapsed >= 0 ? elapsed : 0);
+            String gcName  = gc.getName();
+            String gcType  = classifyGc(gcName);
+            Map<String, String> tags = new HashMap<>(4);
+            tags.put("gc", gcName);
+            tags.put("gc.type", gcType);
+
+            // 버그 수정: Gauge → Counter (단조 증가 누적값은 OTel SUM/Monotonic이 맞음)
+            // delta를 계산해 Counter에 add → Counter 내부 합산값 = JVM 시작 이후 누적값
+            long prevCount   = lastGcCount.getOrDefault(gcName, 0L);
+            long prevElapsed = lastGcElapsed.getOrDefault(gcName, 0L);
+            long deltaCount   = Math.max(0L, count   - prevCount);
+            long deltaElapsed = Math.max(0L, (elapsed >= 0 ? elapsed : 0) - prevElapsed);
+
+            if (deltaCount > 0) {
+                reg.counter("jvm.gc.count",       tags).add(deltaCount);
+                reg.counter("jvm.gc.duration_ms", tags).add(deltaElapsed);
+                lastGcCount.put(gcName, count);
+                lastGcElapsed.put(gcName, elapsed >= 0 ? elapsed : 0);
+            } else if (!lastGcCount.containsKey(gcName)) {
+                // 최초 등록 — 현재 값을 기준점으로 설정 (JVM 시작 시 발생한 GC 제외)
+                lastGcCount.put(gcName, count);
+                lastGcElapsed.put(gcName, elapsed >= 0 ? elapsed : 0);
+            }
         }
+    }
+
+    /** GC 컬렉터 이름에서 Young(minor) / Old(major) 분류 */
+    private static String classifyGc(String gcName) {
+        if (gcName == null) return "unknown";
+        String lc = gcName.toLowerCase();
+        if (lc.contains("young") || lc.contains("scavenge")
+                || lc.contains("parnew") || lc.contains("minor")
+                || lc.contains("copy")) {
+            return "young";
+        }
+        return "old";
     }
 
     private static void collectThreads() {

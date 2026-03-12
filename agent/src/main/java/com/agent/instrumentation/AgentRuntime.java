@@ -25,14 +25,8 @@ import com.agent.trace.exporter.LoggingSpanExporter;
 import com.agent.trace.exporter.OtlpGrpcSpanExporter;
 import com.agent.trace.exporter.OtlpHttpSpanExporter;
 import com.agent.trace.exporter.SpanExporter;
+import com.agent.trace.processor.TailSamplingSpanProcessor;
 import java.util.Arrays;
-
-import com.agent.common.OtlpHttpSender;
-import com.agent.common.grpc.GrpcSender;
-import com.agent.logs.OtlpHttpLogExporter;
-import com.agent.logs.OtlpGrpcLogExporter;
-import com.agent.metric.OtlpHttpMetricExporter;
-import com.agent.metric.OtlpGrpcMetricExporter;
 
 /**
  * 에이전트 전역 TracerProvider를 보유한다.
@@ -70,22 +64,30 @@ public final class AgentRuntime {
                     CompositeMetricExporter.of(
                             new FileMetricExporter(),
                             new OtlpGrpcMetricExporter(config.getServiceName(), sharedGrpc)));
-            AgentLogger.info("프로토콜: gRPC (Protobuf) endpoint=" + config.getGrpcEndpoint());
+            AgentLogger.info("프로토콜: OTLP/HTTP Protobuf endpoint=" + config.getGrpcEndpoint());
         }
 
+        // Fix 1: ParentBased — 항상 ParentBasedSampler로 감싸서 원격 부모의 sampled 결정을 존중
         Sampler sampler;
         AdaptiveSampler adaptiveSampler = null;
         if (config.getTargetSps() > 0) {
             adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
-            sampler = adaptiveSampler;
-            AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + ")");
+            sampler = Sampler.parentBased(adaptiveSampler);
+            AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + "), wrapped in ParentBasedSampler");
         } else {
-            sampler = Sampler.traceIdRatioBased(config.getSampleRate());
+            sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
         }
 
         PROVIDER = new SdkTracerProvider(IdGenerator.random());
         PROVIDER.setSampler(sampler);
-        PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
+
+        // Fix 2: True Tail Sampling — traceId 단위로 버퍼링, 루트 스팬 완료 시 트레이스 전체 평가
+        if (config.isTailSamplingEnabled()) {
+            PROVIDER.addSpanProcessor(new TailSamplingSpanProcessor(spanExporter, config));
+            AgentLogger.info("[TailSamplingSpanProcessor] Enabled (TTL=" + config.getTailSamplingTtlMs() + "ms)");
+        } else {
+            PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
+        }
 
         // JaviSdk 초기화 (Trace + Log + Metric 통합 관리)
         JaviSdk.initialize(PROVIDER, loggerProvider, meterProvider);
@@ -104,6 +106,7 @@ public final class AgentRuntime {
         AgentLogger.info("service=" + config.getServiceName()
                 + " sampleRate=" + config.getSampleRate());
         AgentLogger.info("trace 로그 파일: " + TraceLogger.logFilePath());
+        AgentLogger.info(com.agent.logs.LogSampler.INSTANCE.describe());
     }
 
     private AgentRuntime() {}

@@ -2,47 +2,50 @@ package com.agent.instrumentation;
 
 import com.agent.common.utils.HeaderSanitizer;
 import com.agent.logs.AgentLogger;
-import com.agent.propagation.MapTextMapGetter;
-import com.agent.propagation.TraceContextPropagator;
 import com.agent.span.Scope;
 import com.agent.span.Span;
 import com.agent.span.SpanBuilder;
 import com.agent.span.SpanContext;
 import com.agent.span.SpanKind;
+import com.agent.span.SpanStatus;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
 import org.slf4j.MDC;
 
 /**
- * ByteBuddy advice for controller methods.
+ * ByteBuddy advice for Spring MVC controller methods.
  *
- * 스팬 이름: OTel HTTP 시맨틱 컨벤션에 따라 "METHOD /route" 형식 사용.
- * Spring RequestContextHolder를 reflection으로 접근해 실제 HTTP 정보를 가져온다.
- * Spring이 없는 환경에서는 "SimpleClassName#methodName" 으로 fallback.
- * 들어오는 W3C traceparent 헤더를 추출해 분산 트레이싱 컨텍스트를 이어받는다.
+ * 스팬 이름: "METHOD /route-template" — Spring의 bestMatchingPattern으로 URL 정규화
+ *   (예: "GET /users/{id}" — 고카디널리티 방지)
+ * http.response.status_code: onExit에서 HttpServletResponse.getStatus()로 추출.
+ * http.route / http.scheme / http.host: OTel HTTP 시맨틱 속성 추가.
  */
 public final class ControllerMethodAdvice {
 
-    // 서비스 이름은 JVM 시작 시 한 번만 로드 (AgentConfig.load() 반복 호출 방지)
     private static final String SERVICE_NAME = com.agent.config.AgentConfig.load().getServiceName();
+    // Spring MVC가 매칭된 라우트 패턴을 request attribute에 저장하는 키
+    private static final String BEST_MATCHING_PATTERN_ATTR =
+            "org.springframework.web.servlet.HandlerMapping.bestMatchingPattern";
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
             @Advice.Origin("#t") String typeName,
             @Advice.Origin("#m") String methodName) {
 
-        // serviceDisable 체크: 비활성화된 서비스면 계측 건너뜀
         com.agent.config.RemoteConfig remoteConfig = com.agent.config.RemoteConfigHolder.get();
         if (!remoteConfig.getServiceDisable().isEmpty()
                 && remoteConfig.getServiceDisable().contains(SERVICE_NAME)) {
             return null;
         }
 
-        // span name: Spring RequestContextHolder로 HTTP 정보 추출, fallback은 ClassName#method
         String spanName;
         String httpMethod = null;
-        String uri = null;
+        String uri        = null;   // raw URI (http.target)
+        String route      = null;   // template (http.route) — low-cardinality span name
+        String scheme     = null;
+        String host       = null;
         SpanContext remoteParent = null;
+
         try {
             Class<?> rch = Class.forName(
                     "org.springframework.web.context.request.RequestContextHolder");
@@ -50,16 +53,46 @@ public final class ControllerMethodAdvice {
             if (attrs != null) {
                 Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
                 httpMethod = (String) req.getClass().getMethod("getMethod").invoke(req);
-                uri = (String) req.getClass().getMethod("getRequestURI").invoke(req);
-                spanName = httpMethod + " " + uri;
+                uri        = (String) req.getClass().getMethod("getRequestURI").invoke(req);
 
-                // W3C traceparent & baggage 헤더 추출 — 분산 트레이싱 및 비즈니스 맥락 전파
+                // URL 정규화: bestMatchingPattern → "/users/{id}" 형식
+                try {
+                    Object pattern = req.getClass()
+                            .getMethod("getAttribute", String.class)
+                            .invoke(req, BEST_MATCHING_PATTERN_ATTR);
+                    if (pattern != null) route = pattern.toString();
+                } catch (Throwable ignored) {}
+
+                // http.scheme
+                try {
+                    scheme = (String) req.getClass().getMethod("getScheme").invoke(req);
+                } catch (Throwable ignored) {}
+
+                // http.host — Host 헤더 우선, 없으면 serverName:port 조합
+                try {
+                    host = (String) req.getClass()
+                            .getMethod("getHeader", String.class).invoke(req, "Host");
+                    if (host == null) {
+                        String serverName = (String) req.getClass()
+                                .getMethod("getServerName").invoke(req);
+                        int serverPort = (int) req.getClass()
+                                .getMethod("getServerPort").invoke(req);
+                        host = (serverPort == 80 || serverPort == 443)
+                                ? serverName
+                                : serverName + ":" + serverPort;
+                    }
+                } catch (Throwable ignored) {}
+
+                // 스팬 이름: route 템플릿 우선, 없으면 raw URI
+                spanName = httpMethod + " " + (route != null ? route : uri);
+
+                // W3C traceparent & baggage 추출
                 try {
                     java.util.Map<String, String> headers = new java.util.HashMap<>();
                     String traceparent = (String) req.getClass()
                             .getMethod("getHeader", String.class).invoke(req, "traceparent");
                     if (traceparent != null) headers.put("traceparent", traceparent);
-                    
+
                     String tracestate = (String) req.getClass()
                             .getMethod("getHeader", String.class).invoke(req, "tracestate");
                     if (tracestate != null) headers.put("tracestate", tracestate);
@@ -68,18 +101,18 @@ public final class ControllerMethodAdvice {
                             .getMethod("getHeader", String.class).invoke(req, "baggage");
                     if (baggageHeader != null) headers.put("baggage", baggageHeader);
 
-                    // 1. Trace Context 추출
                     if (traceparent != null) {
-                        com.agent.span.SpanContext extracted = com.agent.propagation.TraceContextPropagator.extractStatic(
-                                headers, new com.agent.propagation.MapTextMapGetter());
+                        com.agent.span.SpanContext extracted =
+                                com.agent.propagation.TraceContextPropagator.extractStatic(
+                                        headers, new com.agent.propagation.MapTextMapGetter());
                         if (extracted.isValid()) remoteParent = extracted;
                     }
 
-                    // 2. Baggage 추출 및 컨텍스트 설정
-                    com.agent.propagation.Baggage baggage = com.agent.propagation.ContextPropagators
-                            .getBaggagePropagator().extract(headers, new com.agent.propagation.MapTextMapGetter());
+                    com.agent.propagation.Baggage baggage =
+                            com.agent.propagation.ContextPropagators
+                                    .getBaggagePropagator()
+                                    .extract(headers, new com.agent.propagation.MapTextMapGetter());
                     if (!baggage.isEmpty()) {
-                        // 추출된 Baggage를 현재 ThreadLocal에 설정 (Scope 관리는 하단 로직과 통합 필요)
                         com.agent.span.Context.makeCurrent(baggage);
                     }
                 } catch (Throwable ignored) {}
@@ -92,21 +125,18 @@ public final class ControllerMethodAdvice {
             spanName = (dot >= 0 ? typeName.substring(dot + 1) : typeName) + "#" + methodName;
         }
 
-        Tracer tracer = AgentRuntime.tracer();
+        Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.spring.mvc");
         SpanBuilder builder = tracer.spanBuilder(spanName).setSpanKind(SpanKind.SERVER);
-        if (remoteParent != null) {
-            builder.setParent(remoteParent);
-        }
+        if (remoteParent != null) builder.setParent(remoteParent);
         Span span = builder.startSpan();
 
-        if (httpMethod != null) {
-            span.setAttribute("http.request.method", httpMethod);
-        }
-        if (uri != null) {
-            span.setAttribute("http.target", uri);
-        }
+        if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
+        if (uri != null)        span.setAttribute("http.target", uri);
+        if (route != null)      span.setAttribute("http.route", route);
+        if (scheme != null)     span.setAttribute("http.scheme", scheme);
+        if (host != null)       span.setAttribute("http.host", host);
 
-        // customHeaders: 원격 설정에서 지정한 HTTP 헤더를 스팬 속성으로 캡처
+        // 원격 설정에서 지정한 커스텀 헤더 캡처
         java.util.List<String> customHeaders = remoteConfig.getCustomHeaders();
         if (!customHeaders.isEmpty()) {
             try {
@@ -116,9 +146,7 @@ public final class ControllerMethodAdvice {
                 if (attrs != null) {
                     Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
                     for (String header : customHeaders) {
-                        if (HeaderSanitizer.isSensitive(header)) {
-                            continue; // 보안상 민감한 헤더는 캡처 스킵
-                        }
+                        if (HeaderSanitizer.isSensitive(header)) continue;
                         try {
                             String val = (String) req.getClass()
                                     .getMethod("getHeader", String.class).invoke(req, header);
@@ -133,57 +161,102 @@ public final class ControllerMethodAdvice {
 
         Scope scope = span.makeCurrent();
 
-        // MDC에 traceId/spanId 주입 — 이 span의 duration 동안 모든 log에 반영됨
         String prevTraceId = MDC.get("traceId");
-        String prevSpanId = MDC.get("spanId");
+        String prevSpanId  = MDC.get("spanId");
         SpanContext spanCtx = span.getContext();
         if (spanCtx != null && spanCtx.isValid()) {
             MDC.put("traceId", spanCtx.getTraceId());
-            MDC.put("spanId", spanCtx.getSpanId());
+            MDC.put("spanId",  spanCtx.getSpanId());
         }
 
         AgentLogger.debug("[HTTP] span started: " + spanName
                 + (remoteParent != null ? " (propagated traceId=" + remoteParent.getTraceId() + ")" : ""));
-        return new State(span, scope, prevTraceId, prevSpanId);
+        return new State(span, scope, prevTraceId, prevSpanId,
+                route != null ? route : uri, httpMethod, System.nanoTime());
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     public static void onExit(@Advice.Enter State state, @Advice.Thrown Throwable error) {
-        if (state == null) {
-            return;
-        }
+        if (state == null) return;
+
+        // http.response.status_code: HttpServletResponse.getStatus()로 추출
+        try {
+            Class<?> rch = Class.forName(
+                    "org.springframework.web.context.request.RequestContextHolder");
+            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
+            if (attrs != null) {
+                Object response = attrs.getClass().getMethod("getResponse").invoke(attrs);
+                if (response != null) {
+                    int statusCode = (int) response.getClass().getMethod("getStatus").invoke(response);
+                    state.span.setAttribute("http.response.status_code", String.valueOf(statusCode));
+                    // 4xx/5xx — exception 없이도 에러로 표시 (error rate 계산용)
+                    if (statusCode >= 400 && error == null) {
+                        state.span.setStatus(SpanStatus.ERROR, "HTTP " + statusCode);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+
         if (error != null) {
             state.span.recordException(error);
-            state.span.setStatus(com.agent.span.SpanStatus.ERROR, error.getMessage());
+            state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             AgentLogger.debug("[HTTP] span error: " + error.getMessage());
         }
         state.scope.close();
         state.span.end();
 
-        // MDC 복원 — 이전 값이 없으면 제거, 있으면 복원 (중첩 span 지원)
-        if (state.prevTraceId == null) {
-            MDC.remove("traceId");
-        } else {
-            MDC.put("traceId", state.prevTraceId);
-        }
-        if (state.prevSpanId == null) {
-            MDC.remove("spanId");
-        } else {
-            MDC.put("spanId", state.prevSpanId);
-        }
+        // HTTP 요청 메트릭 기록 (Span과 별개로 100% 집계)
+        recordHttpMetrics(state, error);
+
+        if (state.prevTraceId == null) MDC.remove("traceId"); else MDC.put("traceId", state.prevTraceId);
+        if (state.prevSpanId  == null) MDC.remove("spanId");  else MDC.put("spanId",  state.prevSpanId);
+    }
+
+    private static void recordHttpMetrics(State state, Throwable error) {
+        try {
+            if (state.route == null) return;
+            long durationMs = (System.nanoTime() - state.startNano) / 1_000_000L;
+            String method = state.httpMethod != null ? state.httpMethod : "UNKNOWN";
+
+            // 요청 count 태그: method + route (카디널리티 제어)
+            java.util.Map<String, String> countTags = new java.util.HashMap<>(4);
+            countTags.put("http.request.method", method);
+            countTags.put("http.route", state.route);
+
+            com.agent.metric.MetricRegistry reg = com.agent.metric.MetricRegistry.get();
+            reg.counter("http.server.request.count", countTags).increment();
+
+            // latency 히스토그램 태그: method + route (status는 카디널리티가 낮으므로 추가 가능)
+            java.util.Map<String, String> durTags = new java.util.HashMap<>(4);
+            durTags.put("http.request.method", method);
+            durTags.put("http.route", state.route);
+            reg.histogram("http.server.request.duration", durTags).record(durationMs);
+
+            // 에러 카운터 (5xx or exception)
+            if (error != null) {
+                reg.counter("http.server.request.error.count", countTags).increment();
+            }
+        } catch (Throwable ignored) {}
     }
 
     public static final class State {
-        public final Span span;
-        public final Scope scope;
+        public final Span   span;
+        public final Scope  scope;
         public final String prevTraceId;
         public final String prevSpanId;
+        public final String route;
+        public final String httpMethod;
+        public final long   startNano;
 
-        public State(Span span, Scope scope, String prevTraceId, String prevSpanId) {
-            this.span = span;
-            this.scope = scope;
+        public State(Span span, Scope scope, String prevTraceId, String prevSpanId,
+                     String route, String httpMethod, long startNano) {
+            this.span        = span;
+            this.scope       = scope;
             this.prevTraceId = prevTraceId;
-            this.prevSpanId = prevSpanId;
+            this.prevSpanId  = prevSpanId;
+            this.route       = route;
+            this.httpMethod  = httpMethod;
+            this.startNano   = startNano;
         }
     }
 

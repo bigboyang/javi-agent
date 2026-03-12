@@ -23,9 +23,14 @@ public final class SdkLogEmitter {
 
     /**
      * 로그 이벤트를 캡처하여 파이프라인에 넣는다.
+     *
+     * <p>LogSampler를 통해 레벨 필터링, 샘플링, 속도 제한을 적용한 뒤 통과한 로그만 전송한다.
      */
     public static void emit(String loggerName, String level, String message, Map<String, String> attributes) {
         try {
+            // 레벨 필터 + 샘플링 + 속도 제한 — 드랍 결정은 최대한 빠르게 처리
+            if (!LogSampler.INSTANCE.shouldSample(level)) return;
+
             JaviSdk sdk = JaviSdk.get();
             if (sdk == null) return;
 

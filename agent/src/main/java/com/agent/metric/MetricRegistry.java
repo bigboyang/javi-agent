@@ -1,26 +1,35 @@
 package com.agent.metric;
 
 import com.agent.common.JaviSdk;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
  * OTel/DataDog 방식의 다차원 메트릭 엔진.
  * (Name + Attributes) 조합으로 메트릭을 수집하고 전송한다.
+ *
+ * <p>지원 타입:
+ * <ul>
+ *   <li>{@link Counter}  — monotonic sum (요청 수, 에러 수 등)</li>
+ *   <li>{@link Gauge}    — 현재 값 (메모리, 커넥션 수 등)</li>
+ *   <li>{@link Histogram} — count/sum/min/max (기존 호환)</li>
+ *   <li>{@link ExplicitBucketHistogram} — P50/P95/P99 지원 버킷 히스토그램</li>
+ * </ul>
  */
 public final class MetricRegistry {
 
     private static final MetricRegistry INSTANCE = new MetricRegistry();
 
-    private final ConcurrentHashMap<MetricKey, Counter>   counters   = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<MetricKey, Gauge>     gauges     = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, Histogram>    histograms = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MetricKey, Counter>                   counters           = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MetricKey, Gauge>                     gauges             = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Histogram>                    histograms         = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<MetricKey, ExplicitBucketHistogram>   bucketHistograms   = new ConcurrentHashMap<>();
 
     private MetricRegistry() {}
 
@@ -40,12 +49,29 @@ public final class MetricRegistry {
         return gauges.computeIfAbsent(key, k -> new Gauge(name, k.getAttributes()));
     }
 
-    /** 히스토그램 획득 또는 생성 (이름 기반, 속성 없음). */
+    /** 히스토그램 획득 또는 생성 (이름 기반, 속성 없음 — 하위 호환용). */
     public Histogram histogram(String name) {
         return histograms.computeIfAbsent(name, Histogram::new);
     }
 
-    /** 
+    /**
+     * ExplicitBucketHistogram 획득 또는 생성 (속성 기반).
+     * P50/P95/P99 퍼센타일을 지원하는 OTel 표준 히스토그램.
+     *
+     * <p>사용 예: HTTP 레이턴시, DB 쿼리 레이턴시
+     * <pre>{@code
+     * MetricRegistry.get()
+     *     .histogram("http.server.request.duration", tags)
+     *     .record(durationMs);
+     * }</pre>
+     */
+    public ExplicitBucketHistogram histogram(String name, Map<String, String> attributes) {
+        MetricKey key = new MetricKey(name, attributes);
+        return bucketHistograms.computeIfAbsent(key,
+                k -> new ExplicitBucketHistogram(name, k.getAttributes()));
+    }
+
+    /**
      * 현재 등록된 모든 메트릭의 스냅샷을 찍어 SdkMeterProvider로 전송한다.
      * 주기적으로 호출된다 (예: JvmMetricsCollector 수집 시).
      */
@@ -53,65 +79,84 @@ public final class MetricRegistry {
         JaviSdk sdk = JaviSdk.get();
         if (sdk == null) return;
 
-        // 1. Counter들을 MetricData로 변환 (Sum 타입)
-        Map<String, List<Counter>> countersGroupedByName = counters.values().stream()
-                .collect(Collectors.groupingBy(Counter::getName));
-
-        for (Map.Entry<String, List<Counter>> entry : countersGroupedByName.entrySet()) {
-            List<MetricData.Point> points = entry.getValue().stream()
-                    .map(c -> new MetricData.Point(c.get(), c.getAttributes(), Instant.now()))
-                    .collect(Collectors.toList());
-
-            sdk.getMeterProvider().record(new MetricData(
-                    entry.getKey(), "", "count", MetricData.MetricType.SUM, points
-            ));
-        }
-
-        // 2. Gauge들을 MetricData로 변환 (Gauge 타입)
-        Map<String, List<Gauge>> gaugesGroupedByName = gauges.values().stream()
-                .collect(Collectors.groupingBy(Gauge::getName));
-
-        for (Map.Entry<String, List<Gauge>> entry : gaugesGroupedByName.entrySet()) {
-            List<MetricData.Point> points = entry.getValue().stream()
-                    .map(g -> new MetricData.Point(g.get(), g.getAttributes(), Instant.now()))
-                    .collect(Collectors.toList());
-
-            sdk.getMeterProvider().record(new MetricData(
-                    entry.getKey(), "", "value", MetricData.MetricType.GAUGE, points
-            ));
-        }
-
-        // 3. Histogram들을 count/sum/min/max 4개 메트릭으로 분해
         Instant now = Instant.now();
+
+        // 1. Counter → SUM (Monotonic)
+        Map<String, List<Counter>> countersByName = new HashMap<>();
+        for (Counter c : counters.values()) {
+            countersByName.computeIfAbsent(c.getName(), k -> new ArrayList<>()).add(c);
+        }
+        for (Map.Entry<String, List<Counter>> entry : countersByName.entrySet()) {
+            List<MetricData.Point> pts = new ArrayList<>(entry.getValue().size());
+            for (Counter c : entry.getValue()) {
+                pts.add(new MetricData.Point(c.get(), c.getAttributes(), now));
+            }
+            sdk.getMeterProvider().record(new MetricData(
+                    entry.getKey(), "", "count", MetricData.MetricType.SUM, pts));
+        }
+
+        // 2. Gauge → GAUGE
+        Map<String, List<Gauge>> gaugesByName = new HashMap<>();
+        for (Gauge g : gauges.values()) {
+            gaugesByName.computeIfAbsent(g.getName(), k -> new ArrayList<>()).add(g);
+        }
+        for (Map.Entry<String, List<Gauge>> entry : gaugesByName.entrySet()) {
+            List<MetricData.Point> pts = new ArrayList<>(entry.getValue().size());
+            for (Gauge g : entry.getValue()) {
+                pts.add(new MetricData.Point(g.get(), g.getAttributes(), now));
+            }
+            sdk.getMeterProvider().record(new MetricData(
+                    entry.getKey(), "", "value", MetricData.MetricType.GAUGE, pts));
+        }
+
+        // 3. 기존 Histogram → count/sum/min/max 4개 메트릭 분해 (하위 호환)
         for (Histogram hist : histograms.values()) {
             long count = hist.getCount();
             if (count == 0) continue;
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".count", "", "count",
+                    MetricData.MetricType.SUM,
+                    Collections.singletonList(new MetricData.Point(count, Collections.emptyMap(), now))));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".sum", "", "1",
+                    MetricData.MetricType.SUM,
+                    Collections.singletonList(new MetricData.Point(hist.getSum(), Collections.emptyMap(), now))));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".min", "", "1",
+                    MetricData.MetricType.GAUGE,
+                    Collections.singletonList(new MetricData.Point(hist.getMin(), Collections.emptyMap(), now))));
+            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".max", "", "1",
+                    MetricData.MetricType.GAUGE,
+                    Collections.singletonList(new MetricData.Point(hist.getMax(), Collections.emptyMap(), now))));
+        }
 
-            List<MetricData.Point> countPt = Collections.singletonList(
-                    new MetricData.Point(count, Collections.emptyMap(), now));
-            List<MetricData.Point> sumPt = Collections.singletonList(
-                    new MetricData.Point(hist.getSum(), Collections.emptyMap(), now));
-            List<MetricData.Point> minPt = Collections.singletonList(
-                    new MetricData.Point(hist.getMin(), Collections.emptyMap(), now));
-            List<MetricData.Point> maxPt = Collections.singletonList(
-                    new MetricData.Point(hist.getMax(), Collections.emptyMap(), now));
-
-            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".count",  "", "count", MetricData.MetricType.SUM,   countPt));
-            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".sum",    "", "1",     MetricData.MetricType.SUM,   sumPt));
-            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".min",    "", "1",     MetricData.MetricType.GAUGE, minPt));
-            sdk.getMeterProvider().record(new MetricData(hist.getName() + ".max",    "", "1",     MetricData.MetricType.GAUGE, maxPt));
+        // 4. ExplicitBucketHistogram → OTLP Histogram (P50/P95/P99 + Exemplar 포함)
+        Map<String, List<ExplicitBucketHistogram>> bucketsByName = new HashMap<>();
+        for (Map.Entry<MetricKey, ExplicitBucketHistogram> entry : bucketHistograms.entrySet()) {
+            String metricName = entry.getKey().getName();
+            bucketsByName.computeIfAbsent(metricName, k -> new ArrayList<>()).add(entry.getValue());
+        }
+        for (Map.Entry<String, List<ExplicitBucketHistogram>> entry : bucketsByName.entrySet()) {
+            List<MetricData.HistogramPoint> hpts = new ArrayList<>(entry.getValue().size());
+            for (ExplicitBucketHistogram hist : entry.getValue()) {
+                long count = hist.getCount();
+                if (count == 0) continue;
+                long[] lBounds = hist.getBoundaries();
+                double[] dBounds = new double[lBounds.length];
+                for (int i = 0; i < lBounds.length; i++) dBounds[i] = lBounds[i];
+                // Exemplar 수집 후 슬롯 리셋 (다음 주기에 새 exemplar 수집)
+                List<Exemplar> exemplars = hist.collectAndResetExemplars();
+                hpts.add(new MetricData.HistogramPoint(
+                        hist.getAttributes(), now,
+                        count, hist.getSum(), hist.getMin(), hist.getMax(),
+                        hist.getBucketCounts(), dBounds, exemplars));
+            }
+            if (!hpts.isEmpty()) {
+                sdk.getMeterProvider().record(
+                        MetricData.ofHistogram(entry.getKey(), "", "ms", hpts));
+            }
         }
     }
 
-    public Map<MetricKey, Counter> counters() {
-        return Collections.unmodifiableMap(counters);
-    }
-
-    public Map<MetricKey, Gauge> gauges() {
-        return Collections.unmodifiableMap(gauges);
-    }
-
-    public Map<String, Histogram> histograms() {
-        return Collections.unmodifiableMap(histograms);
-    }
+    public Map<MetricKey, Counter>                   counters()        { return Collections.unmodifiableMap(counters); }
+    public Map<MetricKey, Gauge>                     gauges()          { return Collections.unmodifiableMap(gauges); }
+    public Map<String, Histogram>                    histograms()      { return Collections.unmodifiableMap(histograms); }
+    public Map<MetricKey, ExplicitBucketHistogram>   bucketHistograms(){ return Collections.unmodifiableMap(bucketHistograms); }
 }

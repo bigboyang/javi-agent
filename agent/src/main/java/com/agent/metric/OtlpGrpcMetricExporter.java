@@ -9,6 +9,7 @@ import com.agent.logs.AgentLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,8 +38,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
 
-    private static final String GRPC_PATH =
-            "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export";
+    private static final String GRPC_PATH = "/v1/metrics";
 
     // OTLP aggregationTemporality: CUMULATIVE = 2
     private static final int TEMPORALITY_CUMULATIVE = 2;
@@ -73,6 +73,18 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
     private static final int FN_HDP_TIME_NS        = 3;
     private static final int FN_HDP_COUNT          = 4;  // uint64
     private static final int FN_HDP_SUM            = 5;  // optional double
+    private static final int FN_HDP_BUCKET_COUNTS  = 6;  // repeated uint64 (packed)
+    private static final int FN_HDP_EXPLICIT_BOUNDS= 7;  // repeated double  (packed)
+    private static final int FN_HDP_EXEMPLARS      = 8;  // repeated Exemplar
+    private static final int FN_HDP_MIN            = 11; // optional double
+    private static final int FN_HDP_MAX            = 12; // optional double
+
+    // Exemplar field numbers (opentelemetry-proto/metrics/v1/metrics.proto Exemplar)
+    private static final int FN_EX_FILTERED_ATTRS  = 7;  // repeated KeyValue
+    private static final int FN_EX_TIME_NS         = 2;  // fixed64
+    private static final int FN_EX_AS_DOUBLE       = 3;  // double (oneof value)
+    private static final int FN_EX_SPAN_ID         = 4;  // bytes (8 bytes)
+    private static final int FN_EX_TRACE_ID        = 5;  // bytes (16 bytes)
 
     // Top-level wrapper field numbers
     private static final int FN_RESOURCE_METRICS   = 1;  // ExportMetricsServiceRequest
@@ -157,7 +169,10 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
 
         ByteArrayOutputStream metricsOut = new ByteArrayOutputStream(metrics.size() * 200);
         for (MetricData metric : metrics) {
-            if (metric == null || metric.getPoints() == null || metric.getPoints().isEmpty()) continue;
+            if (metric == null) continue;
+            boolean hasPoints = metric.getPoints() != null && !metric.getPoints().isEmpty();
+            boolean hasHistPts = metric.getHistogramPoints() != null && !metric.getHistogramPoints().isEmpty();
+            if (!hasPoints && !hasHistPts) continue;
             byte[] metricBytes = encodeMetric(metric);
             ProtoEncoder.writeMessage(metricsOut, FN_SM_METRICS, metricBytes);
         }
@@ -211,7 +226,7 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
                 ProtoEncoder.writeMessage(out, FN_METRIC_SUM, encodeSum(metric.getPoints()));
                 break;
             case HISTOGRAM:
-                ProtoEncoder.writeMessage(out, FN_METRIC_HISTOGRAM, encodeHistogram(metric.getPoints()));
+                ProtoEncoder.writeMessage(out, FN_METRIC_HISTOGRAM, encodeHistogram(metric));
                 break;
             default:
                 ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints()));
@@ -241,13 +256,91 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
         return out.toByteArray();
     }
 
-    private static byte[] encodeHistogram(Collection<MetricData.Point> points) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 80 + 8);
-        for (MetricData.Point point : points) {
-            if (point == null) continue;
-            ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPoint(point));
+    private static byte[] encodeHistogram(MetricData metric) {
+        Collection<MetricData.HistogramPoint> hpts = metric.getHistogramPoints();
+        ByteArrayOutputStream out;
+        if (hpts != null && !hpts.isEmpty()) {
+            // ExplicitBucketHistogram — 버킷 데이터 포함
+            out = new ByteArrayOutputStream(hpts.size() * 200 + 8);
+            for (MetricData.HistogramPoint hp : hpts) {
+                if (hp == null) continue;
+                ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointFull(hp));
+            }
+        } else {
+            // 기존 Point 기반 히스토그램 (하위 호환)
+            Collection<MetricData.Point> pts = metric.getPoints();
+            out = new ByteArrayOutputStream(pts.size() * 80 + 8);
+            for (MetricData.Point point : pts) {
+                if (point == null) continue;
+                ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point));
+            }
         }
         ProtoEncoder.writeVarint32(out, FN_HIST_TEMPORALITY, TEMPORALITY_CUMULATIVE);
+        return out.toByteArray();
+    }
+
+    private static byte[] encodeHistogramDataPointFull(MetricData.HistogramPoint hp) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        encodePointAttributes(out, FN_HDP_ATTRS, hp.getAttributes());
+        if (hp.getTimestamp() != null) {
+            long nanos = hp.getTimestamp().getEpochSecond() * 1_000_000_000L
+                       + hp.getTimestamp().getNano();
+            ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
+        }
+        // count (uint64 varint)
+        ProtoEncoder.writeTag(out, FN_HDP_COUNT, ProtoEncoder.WIRE_VARINT);
+        ProtoEncoder.writeRawVarint64(out, hp.getCount());
+        // sum (optional double)
+        ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, hp.getSum());
+        // bucket_counts: packed repeated uint64
+        ProtoEncoder.writePackedUint64(out, FN_HDP_BUCKET_COUNTS, hp.getBucketCounts());
+        // explicit_bounds: packed repeated double
+        ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
+        // exemplars: repeated Exemplar (field 8) — Metric-Trace 연결
+        List<Exemplar> exemplars = hp.getExemplars();
+        if (exemplars != null && !exemplars.isEmpty()) {
+            for (Exemplar ex : exemplars) {
+                ProtoEncoder.writeMessage(out, FN_HDP_EXEMPLARS, encodeExemplar(ex));
+            }
+        }
+        // min / max (optional double — OTel spec field 11/12)
+        if (hp.getMin() > 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MIN, hp.getMin());
+        if (hp.getMax() > 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MAX, hp.getMax());
+        return out.toByteArray();
+    }
+
+    /**
+     * Exemplar 프로토 인코딩.
+     *
+     * <p>OTLP Exemplar proto field numbers:
+     * <pre>
+     *   filtered_attributes = 7 (repeated KeyValue)
+     *   time_unix_nano       = 2 (fixed64)
+     *   as_double            = 3 (double, oneof value)
+     *   span_id              = 4 (bytes, 8 bytes)
+     *   trace_id             = 5 (bytes, 16 bytes)
+     * </pre>
+     */
+    private static byte[] encodeExemplar(Exemplar ex) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
+        // filtered_attributes (선택적 속성)
+        encodePointAttributes(out, FN_EX_FILTERED_ATTRS, ex.getFilteredAttributes());
+        // time_unix_nano (fixed64)
+        if (ex.getTimeUnixNano() != 0L) {
+            ProtoEncoder.writeFixed64Field(out, FN_EX_TIME_NS, ex.getTimeUnixNano());
+        }
+        // as_double: 측정값
+        ProtoEncoder.writeDoubleField(out, FN_EX_AS_DOUBLE, ex.getValue());
+        // span_id: 8 bytes
+        if (ex.getSpanId() != null && !ex.getSpanId().isEmpty()) {
+            byte[] spanIdBytes = ProtoEncoder.hexToBytes(ex.getSpanId());
+            if (spanIdBytes != null) ProtoEncoder.writeBytes(out, FN_EX_SPAN_ID, spanIdBytes);
+        }
+        // trace_id: 16 bytes
+        if (ex.getTraceId() != null && !ex.getTraceId().isEmpty()) {
+            byte[] traceIdBytes = ProtoEncoder.hexToBytes(ex.getTraceId());
+            if (traceIdBytes != null) ProtoEncoder.writeBytes(out, FN_EX_TRACE_ID, traceIdBytes);
+        }
         return out.toByteArray();
     }
 
@@ -263,7 +356,7 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
         return out.toByteArray();
     }
 
-    private static byte[] encodeHistogramDataPoint(MetricData.Point point) {
+    private static byte[] encodeHistogramDataPointSimple(MetricData.Point point) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(80);
         encodePointAttributes(out, FN_HDP_ATTRS, point.getAttributes());
         if (point.getTimestamp() != null) {
@@ -271,10 +364,8 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
                        + point.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
         }
-        // count = 1 (varint64)
         ProtoEncoder.writeTag(out, FN_HDP_COUNT, ProtoEncoder.WIRE_VARINT);
         ProtoEncoder.writeRawVarint64(out, 1L);
-        // sum = value (double)
         ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
         return out.toByteArray();
     }

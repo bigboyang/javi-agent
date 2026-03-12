@@ -14,6 +14,11 @@ import java.util.Map;
 
 /**
  * Kafka Consumer 계측.
+ *
+ * 추가 속성:
+ *   messaging.kafka.source.partition  — 레코드가 consume된 파티션
+ *   messaging.kafka.message.offset    — 레코드 오프셋
+ *   messaging.message_id              — 레코드 키 (null이면 생략)
  */
 public final class KafkaConsumerAdvice {
 
@@ -21,33 +26,34 @@ public final class KafkaConsumerAdvice {
     public static void onExit(@Advice.Return Object recordsObj) {
         if (recordsObj == null) return;
 
-        // ConsumerRecords<?>로 캐스팅
-        org.apache.kafka.clients.consumer.ConsumerRecords<?, ?> records = (org.apache.kafka.clients.consumer.ConsumerRecords<?, ?>) recordsObj;
+        org.apache.kafka.clients.consumer.ConsumerRecords<?, ?> records =
+                (org.apache.kafka.clients.consumer.ConsumerRecords<?, ?>) recordsObj;
         if (records.isEmpty()) return;
 
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.kafka.consumer");
 
         for (org.apache.kafka.clients.consumer.ConsumerRecord<?, ?> record : records) {
-            String topic = record.topic();
+            String topic    = record.topic();
             String spanName = topic + " process";
 
-            // 컨텍스트 추출 (Extraction)
+            // traceparent 추출
             SpanContext parentContext = null;
             try {
                 Map<String, String> carrier = new HashMap<>();
                 for (org.apache.kafka.common.header.Header header : record.headers()) {
                     if ("traceparent".equals(header.key())) {
-                        carrier.put("traceparent", new String(header.value(), StandardCharsets.UTF_8));
+                        carrier.put("traceparent",
+                                new String(header.value(), StandardCharsets.UTF_8));
                     }
                 }
                 if (!carrier.isEmpty()) {
-                    parentContext = TraceContextPropagator.extractStatic(carrier, new MapTextMapGetter());
+                    parentContext = TraceContextPropagator.extractStatic(
+                            carrier, new MapTextMapGetter());
                 }
             } catch (Throwable ignored) {}
 
             com.agent.span.SpanBuilder builder = tracer.spanBuilder(spanName)
                     .setSpanKind(SpanKind.CONSUMER);
-            
             if (parentContext != null && parentContext.isValid()) {
                 builder.setParent(parentContext);
             }
@@ -56,8 +62,17 @@ public final class KafkaConsumerAdvice {
             span.setAttribute("messaging.system", "kafka");
             span.setAttribute("messaging.destination", topic);
             span.setAttribute("messaging.operation", "process");
+            span.setAttribute("messaging.kafka.source.partition",
+                    String.valueOf(record.partition()));
+            span.setAttribute("messaging.kafka.message.offset",
+                    String.valueOf(record.offset()));
 
-            span.end(); 
+            Object key = record.key();
+            if (key != null) span.setAttribute("messaging.message_id", key.toString());
+
+            span.end();
         }
     }
+
+    private KafkaConsumerAdvice() {}
 }

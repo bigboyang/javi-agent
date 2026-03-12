@@ -37,6 +37,18 @@ public final class AppLogCollector {
         LOG_FILE_PATH = get("JAVI_APP_LOG_FILE", "javi.app.log.file", "javi/logs/javi-app-logs.log");
     }
 
+    /** JAVI_LOG_MIN_LEVEL에서 JUL Level을 파생한다. */
+    private static Level resolveJulLevel() {
+        String minLevel = get("JAVI_LOG_MIN_LEVEL", "javi.log.min.level", "INFO").toUpperCase();
+        switch (minLevel) {
+            case "TRACE": return Level.FINEST;
+            case "DEBUG": return Level.FINE;
+            case "WARN": case "WARNING": return Level.WARNING;
+            case "ERROR": case "SEVERE": return Level.SEVERE;
+            default: return Level.INFO;
+        }
+    }
+
     private AppLogCollector() {}
 
     /**
@@ -84,7 +96,7 @@ public final class AppLogCollector {
             }
             this.fileHandler = new FileHandler(logFile, true);
             this.fileHandler.setFormatter(new AppLogFormatter());
-            setLevel(Level.INFO);
+            setLevel(resolveJulLevel());
         }
 
         @Override

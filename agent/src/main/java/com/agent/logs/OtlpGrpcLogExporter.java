@@ -38,8 +38,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class OtlpGrpcLogExporter implements DataExporter<LogRecord> {
 
-    private static final String GRPC_PATH =
-            "/opentelemetry.proto.collector.logs.v1.LogsService/Export";
+    private static final String GRPC_PATH = "/v1/logs";
 
     // ---- LogRecord proto field numbers ----
     private static final int FN_LOG_TIME_NS       = 1;  // fixed64

@@ -41,18 +41,48 @@ public final class ResourceInfo {
     static {
         Map<String, String> m = new LinkedHashMap<>();
 
-        // host.name & host.fqdn
-        detectHost(m);
+        // service.name (OTel 필수 속성 — 모든 exporter가 이를 공유)
+        String serviceName = get("JAVI_SERVICE_NAME", "javi.service.name", "javi-service");
+        m.put("service.name", serviceName);
+
+        // service.version
+        String serviceVersion = get("JAVI_SERVICE_VERSION", "javi.service.version", "");
+        if (!serviceVersion.isEmpty()) {
+            m.put("service.version", serviceVersion);
+        }
 
         // service.instance.id (멀티 인스턴스 구분 필수)
         m.put("service.instance.id", java.util.UUID.randomUUID().toString());
+
+        // host.name & host.fqdn
+        detectHost(m);
+
+        // host.arch (amd64, arm64, etc.)
+        String osArch = System.getProperty("os.arch", "");
+        if (!osArch.isEmpty()) {
+            // OTel convention: x86_64 → amd64
+            if ("x86_64".equals(osArch)) osArch = "amd64";
+            else if ("aarch64".equals(osArch)) osArch = "arm64";
+            m.put("host.arch", osArch);
+        }
 
         // process.pid (Java 9+)
         try {
             m.put("process.pid", String.valueOf(ProcessHandle.current().pid()));
         } catch (Exception ignored) {}
 
-        // os.type
+        // process.runtime.*
+        String runtimeName = System.getProperty("java.runtime.name", "");
+        if (!runtimeName.isEmpty()) m.put("process.runtime.name", runtimeName);
+        String runtimeVersion = System.getProperty("java.runtime.version", "");
+        if (!runtimeVersion.isEmpty()) m.put("process.runtime.version", runtimeVersion);
+        String vmName = System.getProperty("java.vm.name", "");
+        String vmVersion = System.getProperty("java.vm.version", "");
+        if (!vmName.isEmpty() && !vmVersion.isEmpty()) {
+            m.put("process.runtime.description", vmName + " (" + vmVersion + ")");
+        }
+
+        // os.type + os.description
         detectOs(m);
 
         // deployment.environment
@@ -71,6 +101,7 @@ public final class ResourceInfo {
         m.put("telemetry.sdk.name", "javi-agent");
         m.put("telemetry.sdk.language", "java");
         m.put("telemetry.sdk.version", "1.0.0");
+        m.put("telemetry.auto.version", "1.0.0");
 
         ATTRS = Collections.unmodifiableMap(m);
         ATTRS_LIST = Collections.unmodifiableList(new ArrayList<>(m.entrySet()));
@@ -118,13 +149,18 @@ public final class ResourceInfo {
     }
 
     private static void detectOs(Map<String, String> m) {
-        String osName = System.getProperty("os.name", "unknown").toLowerCase();
-        if (osName.contains("win")) {
+        String osName = System.getProperty("os.name", "unknown");
+        String osNameLower = osName.toLowerCase();
+        if (osNameLower.contains("win")) {
             m.put("os.type", "windows");
-        } else if (osName.contains("mac")) {
+        } else if (osNameLower.contains("mac")) {
             m.put("os.type", "darwin");
         } else {
             m.put("os.type", "linux");
+        }
+        String osVersion = System.getProperty("os.version", "");
+        if (!osName.isEmpty() && !osVersion.isEmpty()) {
+            m.put("os.description", osName + " " + osVersion);
         }
     }
 

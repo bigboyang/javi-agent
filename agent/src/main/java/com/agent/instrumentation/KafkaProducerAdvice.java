@@ -10,7 +10,13 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Kafka Producer 계측.
- * 메시지 전송 시 스팬을 생성하고 traceparent를 헤더에 주입합니다.
+ *
+ * Bug fix: traceparent sampled flag — span.isRecording() 기반으로 "01"/"00" 동적 결정.
+ *   (이전: 항상 "01" 하드코딩 → 비샘플 span에서도 sampled로 잘못 전파)
+ *
+ * 추가 속성:
+ *   messaging.kafka.destination.partition — pr.partition() (null이면 브로커 자동 할당)
+ *   messaging.message_id                  — 레코드 키 (null이면 생략)
  */
 public final class KafkaProducerAdvice {
 
@@ -18,15 +24,13 @@ public final class KafkaProducerAdvice {
     public static State onEnter(@Advice.Argument(0) Object record) {
         if (record == null) return null;
 
-        // Reflection 없이 타입 캐스팅 시도 (Advice는 대상 클래스 로더에서 실행되므로 가능)
-        // 단, 메서드 서명에는 Object를 사용하여 에이전트 클래스 로더에서의 의존성 문제를 피함
-        org.apache.kafka.clients.producer.ProducerRecord<?, ?> pr = (org.apache.kafka.clients.producer.ProducerRecord<?, ?>) record;
+        org.apache.kafka.clients.producer.ProducerRecord<?, ?> pr =
+                (org.apache.kafka.clients.producer.ProducerRecord<?, ?>) record;
 
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.kafka.producer");
         String topic = pr.topic();
-        String spanName = topic + " send";
 
-        Span span = tracer.spanBuilder(spanName)
+        Span span = tracer.spanBuilder(topic + " send")
                 .setSpanKind(SpanKind.PRODUCER)
                 .startSpan();
 
@@ -34,12 +38,24 @@ public final class KafkaProducerAdvice {
         span.setAttribute("messaging.destination", topic);
         span.setAttribute("messaging.operation", "send");
 
-        // 컨텍스트 전파 (Injection)
+        // partition (null = 브로커 자동 배정, 알 수 없으면 속성 생략)
+        Integer partition = pr.partition();
+        if (partition != null) {
+            span.setAttribute("messaging.kafka.destination.partition", String.valueOf(partition));
+        }
+
+        // message_id: 레코드 키
+        Object key = pr.key();
+        if (key != null) {
+            span.setAttribute("messaging.message_id", key.toString());
+        }
+
+        // W3C traceparent 주입 — sampled flag는 span.isRecording() 기반으로 결정
         try {
-            org.apache.kafka.common.header.Headers headers = pr.headers();
             SpanContext ctx = span.getContext();
-            String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-01";
-            headers.add("traceparent", traceparent.getBytes(StandardCharsets.UTF_8));
+            String sampledFlag = span.isRecording() ? "01" : "00";
+            String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-" + sampledFlag;
+            pr.headers().add("traceparent", traceparent.getBytes(StandardCharsets.UTF_8));
         } catch (Throwable ignored) {}
 
         return new State(span, span.makeCurrent());
@@ -59,9 +75,12 @@ public final class KafkaProducerAdvice {
     public static final class State {
         public final Span span;
         public final com.agent.span.Scope scope;
+
         public State(Span span, com.agent.span.Scope scope) {
-            this.span = span;
+            this.span  = span;
             this.scope = scope;
         }
     }
+
+    private KafkaProducerAdvice() {}
 }

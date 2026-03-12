@@ -14,9 +14,13 @@ import com.agent.span.SpanEvent;
 import com.agent.span.SpanKind;
 import com.agent.span.SpanLink;
 import com.agent.span.SpanStatus;
+import com.agent.trace.InstrumentationScopeInfo;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -41,8 +45,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class OtlpGrpcSpanExporter implements SpanExporter {
 
-    private static final String GRPC_PATH =
-            "/opentelemetry.proto.collector.trace.v1.TraceService/Export";
+    private static final String GRPC_PATH = "/v1/traces";
 
     // ---- Span proto field numbers (opentelemetry-proto/trace/v1/trace.proto) ----
     private static final int FN_SPAN_TRACE_ID      = 1;  // bytes
@@ -71,6 +74,7 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
     // Link field numbers
     private static final int FN_LINK_TRACE_ID = 1;
     private static final int FN_LINK_SPAN_ID  = 2;
+    private static final int FN_LINK_ATTRS    = 3;
 
     // Top-level wrapper field numbers
     private static final int FN_RESOURCE_SPANS = 1;  // ExportTraceServiceRequest
@@ -90,6 +94,10 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
     private static final int FN_AV_INT      = 3;
     private static final int FN_AV_DOUBLE   = 4;
 
+    // 매 encodeExportRequest 호출마다 생성되던 것을 상수로 추출
+    private static final InstrumentationScopeInfo DEFAULT_SCOPE =
+            new InstrumentationScopeInfo("javi-agent", "1.0.0", null);
+
     // ---- 내부 상태 ----
     private final GrpcSender sender;
     private final String serviceName;
@@ -97,6 +105,8 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
     private final AtomicLong exportedSpans = new AtomicLong(0);
     private final AtomicLong droppedSpans  = new AtomicLong(0);
     private final AtomicLong failedBatches = new AtomicLong(0);
+    // resource 정보는 변경되지 않으므로 한 번만 인코딩하여 캐싱
+    private volatile byte[] cachedResourceBytes;
 
     // ---- 생성자 ----
 
@@ -117,7 +127,7 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
             return CompletableResultCode.ofSuccess();
         }
         try {
-            byte[] protoBytes = encodeExportRequest(spans, serviceName);
+            byte[] protoBytes = encodeExportRequestWithResource(spans, getResourceBytes());
             SendResult result = sender.send(GRPC_PATH, protoBytes);
 
             if (result == SendResult.SUCCESS) {
@@ -160,35 +170,110 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
 
     // ---- Protobuf 인코딩 ----
 
-    static byte[] encodeExportRequest(Collection<Span> spans, String serviceName) {
-        // 1) Resource
-        byte[] resourceBytes = encodeResource(serviceName);
+    private byte[] getResourceBytes() {
+        if (cachedResourceBytes == null) {
+            synchronized (this) {
+                if (cachedResourceBytes == null) {
+                    cachedResourceBytes = encodeResource(serviceName);
+                }
+            }
+        }
+        return cachedResourceBytes;
+    }
 
-        // 2) 각 Span
-        ByteArrayOutputStream spansOut = new ByteArrayOutputStream(spans.size() * 300);
+    /** 캐싱된 resourceBytes를 사용하는 instance 메서드. export() 경로에서 사용. */
+    private byte[] encodeExportRequestWithResource(Collection<Span> spans, byte[] resourceBytes) {
+        // dropKeys를 배치 단위로 1회만 조회 (기존: 스팬마다 RemoteConfigHolder.get() 호출)
+        Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
+
+        Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = new LinkedHashMap<>();
         for (Span span : spans) {
             if (!(span instanceof ReadableSpan)) continue;
-            byte[] spanBytes = encodeSpan((ReadableSpan) span);
-            ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, spanBytes);
+            ReadableSpan rs = (ReadableSpan) span;
+            InstrumentationScopeInfo scope = rs.getInstrumentationScopeInfo();
+            if (scope == null) scope = DEFAULT_SCOPE;
+            byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
         }
 
-        // 3) InstrumentationScope
-        ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(32);
-        ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, "javi-agent");
-        ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, "1.0.0");
-
-        // 4) ScopeSpans
-        ByteArrayOutputStream scopeSpansOut = new ByteArrayOutputStream(64 + spansOut.size());
-        ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
-        byte[] spansBytes = spansOut.toByteArray();
-        scopeSpansOut.write(spansBytes, 0, spansBytes.length);
-
-        // 5) ResourceSpans
-        ByteArrayOutputStream rsOut = new ByteArrayOutputStream(128 + scopeSpansOut.size());
+        ByteArrayOutputStream rsOut = new ByteArrayOutputStream(128 + spans.size() * 300);
         ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
-        ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
 
-        // 6) ExportTraceServiceRequest
+        for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
+            InstrumentationScopeInfo scope = entry.getKey();
+            List<ReadableSpan> scopeSpanList = entry.getValue();
+
+            ByteArrayOutputStream spansOut = new ByteArrayOutputStream(scopeSpanList.size() * 300);
+            for (ReadableSpan rs : scopeSpanList) {
+                ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+            }
+
+            ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(64);
+            String scopeName = scope.getName() != null ? scope.getName() : "javi-agent";
+            ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, scopeName);
+            if (scope.getVersion() != null) {
+                ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
+            }
+
+            ByteArrayOutputStream scopeSpansOut = new ByteArrayOutputStream(64 + spansOut.size());
+            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
+            byte[] spansBytes = spansOut.toByteArray();
+            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
+
+            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+        }
+
+        ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rsOut.size() + 4);
+        ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_SPANS, rsOut.toByteArray());
+        return requestOut.toByteArray();
+    }
+
+    static byte[] encodeExportRequest(Collection<Span> spans, String serviceName) {
+        // 1) Resource (static 컨텍스트에서는 캐싱 없이 직접 인코딩)
+        byte[] resourceBytes = encodeResource(serviceName);
+
+        // 2) InstrumentationScope별로 스팬 그룹핑
+        Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
+        Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = new LinkedHashMap<>();
+        for (Span span : spans) {
+            if (!(span instanceof ReadableSpan)) continue;
+            ReadableSpan rs = (ReadableSpan) span;
+            InstrumentationScopeInfo scope = rs.getInstrumentationScopeInfo();
+            if (scope == null) scope = DEFAULT_SCOPE;
+            byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
+        }
+
+        // 3) ResourceSpans 구성
+        ByteArrayOutputStream rsOut = new ByteArrayOutputStream(128 + spans.size() * 300);
+        ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
+
+        for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
+            InstrumentationScopeInfo scope = entry.getKey();
+            List<ReadableSpan> scopeSpanList = entry.getValue();
+
+            // 스팬 직렬화
+            ByteArrayOutputStream spansOut = new ByteArrayOutputStream(scopeSpanList.size() * 300);
+            for (ReadableSpan rs : scopeSpanList) {
+                ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+            }
+
+            // InstrumentationScope
+            ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(64);
+            String scopeName = scope.getName() != null ? scope.getName() : "javi-agent";
+            ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, scopeName);
+            if (scope.getVersion() != null) {
+                ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
+            }
+
+            // ScopeSpans
+            ByteArrayOutputStream scopeSpansOut = new ByteArrayOutputStream(64 + spansOut.size());
+            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
+            byte[] spansBytes = spansOut.toByteArray();
+            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
+
+            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+        }
+
+        // 4) ExportTraceServiceRequest
         ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rsOut.size() + 4);
         ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_SPANS, rsOut.toByteArray());
         return requestOut.toByteArray();
@@ -210,7 +295,7 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
         return out.toByteArray();
     }
 
-    private static byte[] encodeSpan(ReadableSpan rs) {
+    private static byte[] encodeSpan(ReadableSpan rs, Set<String> dropKeys) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(256);
         SpanContext ctx = rs.getContext();
 
@@ -227,7 +312,6 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
         ProtoEncoder.writeFixed64Field(out, FN_SPAN_START_NS, rs.getStartTimeNanos());
         ProtoEncoder.writeFixed64Field(out, FN_SPAN_END_NS,   rs.getEndTimeNanos());
 
-        Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
         if (rs.getAttributes() != null) {
             for (Map.Entry<AttributeKey<?>, Object> entry : rs.getAttributes().entrySet()) {
                 String key = entry.getKey().getKey();
@@ -274,12 +358,18 @@ public final class OtlpGrpcSpanExporter implements SpanExporter {
     }
 
     private static byte[] encodeLink(SpanLink link) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(32);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(48);
         SpanContext ctx = link.getSpanContext();
         byte[] traceId = ProtoEncoder.hexToBytes(ctx.getTraceId());
         byte[] spanId  = ProtoEncoder.hexToBytes(ctx.getSpanId());
         if (traceId != null) ProtoEncoder.writeBytes(out, FN_LINK_TRACE_ID, traceId);
         if (spanId  != null) ProtoEncoder.writeBytes(out, FN_LINK_SPAN_ID,  spanId);
+        if (link.getAttributes() != null) {
+            for (Map.Entry<AttributeKey<?>, Object> e : link.getAttributes().entrySet()) {
+                byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
+                if (kv != null) ProtoEncoder.writeMessage(out, FN_LINK_ATTRS, kv);
+            }
+        }
         return out.toByteArray();
     }
 

@@ -224,6 +224,10 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Map<AttributeKey<?>, Object> getAttributes() {
+        // span이 종료된 후에는 더 이상 write가 발생하지 않으므로 복사 불필요
+        if (hasEnded.get()) {
+            return Collections.unmodifiableMap(attributes);
+        }
         synchronized (lock) {
             return Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
         }
@@ -231,6 +235,10 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public List<SpanEvent> getEvents() {
+        // span이 종료된 후에는 더 이상 write가 발생하지 않으므로 복사 불필요
+        if (hasEnded.get()) {
+            return Collections.unmodifiableList(events);
+        }
         synchronized (lock) {
             return Collections.unmodifiableList(new ArrayList<>(events));
         }
@@ -243,6 +251,9 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public SpanStatus getStatus() {
+        if (hasEnded.get()) {
+            return status;
+        }
         synchronized (lock) {
             return status;
         }
@@ -250,6 +261,9 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public String getStatusDescription() {
+        if (hasEnded.get()) {
+            return statusDescription;
+        }
         synchronized (lock) {
             return statusDescription;
         }
@@ -257,6 +271,9 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public int getDroppedAttributeCount() {
+        if (hasEnded.get()) {
+            return droppedAttributeCount;
+        }
         synchronized (lock) {
             return droppedAttributeCount;
         }
@@ -264,6 +281,9 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public int getDroppedEventCount() {
+        if (hasEnded.get()) {
+            return droppedEventCount;
+        }
         synchronized (lock) {
             return droppedEventCount;
         }

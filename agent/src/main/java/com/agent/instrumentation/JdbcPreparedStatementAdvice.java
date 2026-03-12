@@ -13,8 +13,10 @@ import net.bytebuddy.asm.Advice;
  * ByteBuddy advice for JDBC PreparedStatement execute methods (no SQL argument).
  *
  * 대상: PreparedStatement.execute(), executeQuery(), executeUpdate()
- * SQL 추출: preparedStatement.toString()을 통해 드라이버가 제공하는 SQL 정보를 활용.
- *          H2, MySQL, PostgreSQL 등 주요 드라이버는 toString()에 SQL을 포함한다.
+ *
+ * db.system: JdbcStatementAdvice 공유 헬퍼를 통해 실제 DB 벤더 감지.
+ * db.name, net.peer.name, net.peer.port: JDBC URL 파싱으로 추출.
+ * db.user: Connection.getMetaData().getUserName().
  */
 public final class JdbcPreparedStatementAdvice {
 
@@ -22,7 +24,7 @@ public final class JdbcPreparedStatementAdvice {
     public static State onEnter(@Advice.This Object preparedStatement) {
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.jdbc");
 
-        // SQL 인라인 추출 (helper 메서드 호출 대신)
+        // SQL 추출: 필드 직접 접근 → toString() fallback
         String sql = "PreparedStatement";
         if (preparedStatement != null) {
             try {
@@ -31,10 +33,7 @@ public final class JdbcPreparedStatementAdvice {
                     if ("sql".equals(f.getName()) || "originalSql".equals(f.getName())) {
                         f.setAccessible(true);
                         Object val = f.get(preparedStatement);
-                        if (val instanceof String) {
-                            sql = (String) val;
-                            break;
-                        }
+                        if (val instanceof String) { sql = (String) val; break; }
                     }
                 }
             } catch (Throwable ignored) {}
@@ -43,21 +42,29 @@ public final class JdbcPreparedStatementAdvice {
                 if (str != null) sql = str;
             }
         }
-        
-        // 민감한 리터럴 값 마스킹 (PII/보안 강화)
+
         String maskedSql = SqlSanitizer.sanitize(sql);
-        String spanName = maskedSql.length() > 60 ? maskedSql.substring(0, 60) + "..." : maskedSql;
+        String spanName = maskedSql.length() > 60
+                ? maskedSql.substring(0, 60) + "..." : maskedSql;
 
-        Span span = tracer.spanBuilder(spanName)
-                .setSpanKind(SpanKind.CLIENT)
-                .startSpan();
-
-        span.setAttribute("db.system", "sql");
+        Span span = tracer.spanBuilder(spanName).setSpanKind(SpanKind.CLIENT).startSpan();
         span.setAttribute("db.query.text", maskedSql);
+
+        // DB 메타데이터 추출
+        String dbSystem = "other_sql";
+        if (preparedStatement != null) {
+            try {
+                Object conn = preparedStatement.getClass().getMethod("getConnection").invoke(preparedStatement);
+                if (conn != null) dbSystem = JdbcStatementAdvice.extractConnMetadata(conn, span);
+            } catch (Throwable ignored) {}
+        }
+        span.setAttribute("db.system", dbSystem);
+
+        String dbOperation = JdbcStatementAdvice.extractDbOperation(sql);
 
         Scope scope = span.makeCurrent();
         AgentLogger.debug("[JDBC-PS] span started: " + maskedSql);
-        return new State(span, scope);
+        return new State(span, scope, dbSystem, dbOperation, System.nanoTime());
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
@@ -70,15 +77,38 @@ public final class JdbcPreparedStatementAdvice {
         }
         state.scope.close();
         state.span.end();
+        recordDbMetrics(state, error);
+    }
+
+    private static void recordDbMetrics(State state, Throwable error) {
+        try {
+            long durationMs = (System.nanoTime() - state.startNano) / 1_000_000L;
+            java.util.Map<String, String> tags = new java.util.HashMap<>(4);
+            tags.put("db.system", state.dbSystem);
+            tags.put("db.operation", state.dbOperation);
+
+            com.agent.metric.MetricRegistry reg = com.agent.metric.MetricRegistry.get();
+            reg.counter("db.client.operation.count", tags).increment();
+            reg.histogram("db.client.operation.duration", tags).record(durationMs);
+            if (error != null) {
+                reg.counter("db.client.operation.error.count", tags).increment();
+            }
+        } catch (Throwable ignored) {}
     }
 
     public static final class State {
-        public final Span span;
-        public final Scope scope;
+        public final Span   span;
+        public final Scope  scope;
+        public final String dbSystem;
+        public final String dbOperation;
+        public final long   startNano;
 
-        public State(Span span, Scope scope) {
-            this.span = span;
-            this.scope = scope;
+        public State(Span span, Scope scope, String dbSystem, String dbOperation, long startNano) {
+            this.span        = span;
+            this.scope       = scope;
+            this.dbSystem    = dbSystem;
+            this.dbOperation = dbOperation;
+            this.startNano   = startNano;
         }
     }
 

@@ -2,9 +2,13 @@ package com.agent.trace.processor;
 
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.logs.AgentLogger;
+import com.agent.metric.Counter;
+import com.agent.metric.Gauge;
+import com.agent.metric.MetricRegistry;
 import com.agent.span.Span;
 import com.agent.trace.exporter.SpanExporter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -20,44 +24,40 @@ public final class BatchSpanProcessor implements SpanProcessor {
     private final BlockingQueue<Span> queue;
     private final SpanExporter exporter;
     private final int maxBatchSize;
+    private final int maxQueueSize;
     private final long exportIntervalMs;
     private final Thread workerThread;
-    private final java.util.concurrent.ScheduledExecutorService samplerResetExecutor;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicLong droppedSpans  = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.concurrent.atomic.AtomicLong exportedSpans = new java.util.concurrent.atomic.AtomicLong(0);
 
-    // Tail Sampling 설정 캐싱
-    private final boolean tailSamplingEnabled;
-    private final long slowThresholdNanos;
-    private final java.util.Set<String> criticalUrls;
-
-    // 클러스터링 기반 샘플링을 위한 카운터 (Pattern -> Count)
-    private final int clusterMinSamples;
-    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> clusterCounters = new java.util.concurrent.ConcurrentHashMap<>();
+    // ---- Backpressure 메트릭 ----
+    private final Gauge   queueSizeGauge;
+    private final Gauge   queueUtilizationGauge;
+    private final Counter droppedCounter;
+    private final Counter exportedCounter;
 
     public BatchSpanProcessor(SpanExporter exporter, int maxQueueSize, int maxBatchSize, long delayMillis) {
-        this.exporter = exporter;
-        this.maxBatchSize = maxBatchSize;
+        this.exporter      = exporter;
+        this.maxBatchSize  = maxBatchSize;
+        this.maxQueueSize  = maxQueueSize;
         this.exportIntervalMs = delayMillis;
         this.queue = new ArrayBlockingQueue<>(maxQueueSize);
 
-        com.agent.config.AgentConfig config = com.agent.config.AgentConfig.load();
-        this.tailSamplingEnabled = config.isTailSamplingEnabled();
-        this.slowThresholdNanos = java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(config.getSlowThresholdMs());
-        this.criticalUrls = new java.util.HashSet<>(config.getCriticalUrls());
-        this.clusterMinSamples = config.getClusterMinSamples();
+        // MetricRegistry에 backpressure 메트릭 등록
+        MetricRegistry reg = MetricRegistry.get();
+        this.queueSizeGauge        = reg.gauge("javi.pipeline.queue.size",        Collections.emptyMap());
+        this.queueUtilizationGauge = reg.gauge("javi.pipeline.queue.utilization", Collections.emptyMap());
+        this.droppedCounter        = reg.counter("javi.pipeline.spans.dropped",   Collections.emptyMap());
+        this.exportedCounter       = reg.counter("javi.pipeline.spans.exported",  Collections.emptyMap());
 
-        // 1분마다 클러스터 카운터 초기화 스케줄링 (주기적인 대표 샘플 확보용)
-        this.samplerResetExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "javi-sampler-reset");
-            t.setDaemon(true);
-            return t;
-        });
-        this.samplerResetExecutor.scheduleAtFixedRate(clusterCounters::clear, 1, 1, java.util.concurrent.TimeUnit.MINUTES);
+        // 큐 최대 용량은 상수 — Gauge로 한 번 기록
+        reg.gauge("javi.pipeline.queue.capacity", Collections.emptyMap()).set(maxQueueSize);
 
         this.workerThread = new Thread(new Worker(), "javi-span-processor");
         this.workerThread.setDaemon(true);
         this.workerThread.start();
-        AgentLogger.info("[BatchSpanProcessor] 시작 (Queue:" + maxQueueSize + ", TailSampling:" + tailSamplingEnabled + ", ClusterMinSamples:" + clusterMinSamples + ")");
+        AgentLogger.info("[BatchSpanProcessor] 시작 (Queue:" + maxQueueSize + ")");
     }
 
     @Override
@@ -76,81 +76,36 @@ public final class BatchSpanProcessor implements SpanProcessor {
             return;
         }
 
-        boolean originallySampled = span.getContext().getTraceFlags().isSampled();
-
-        // 1. Head Sampling에 의해 이미 선택된 경우 (가장 빈번한 경로)
-        if (originallySampled) {
-            offerToQueue(span);
-            return;
-        }
-
-        // 2. Tail Sampling 로직 (누락된 트레이스 중 가치 있는 것 구조)
-        if (tailSamplingEnabled && isHighValueSpan(span)) {
-            AgentLogger.debug("[TailSampling] Rescued span: " + span.getName() + " (traceId=" + span.getContext().getTraceId() + ")");
+        // head sampler(ParentBased)가 SAMPLE 결정한 스팬만 export
+        if (span.getContext().getTraceFlags().isSampled()) {
             offerToQueue(span);
         }
-    }
-
-    private boolean isHighValueSpan(com.agent.span.Span span) {
-        if (!(span instanceof com.agent.span.ReadableSpan)) {
-            return false;
-        }
-        com.agent.span.ReadableSpan readableSpan = (com.agent.span.ReadableSpan) span;
-
-        // 원격 설정에서 활성 tail policy 확인
-        java.util.Set<String> policy = com.agent.config.RemoteConfigHolder.get().getTailPolicy();
-
-        // 1. 에러 기반 (Error-based)
-        if (policy.contains("error") && readableSpan.getStatus() == com.agent.span.SpanStatus.ERROR) {
-            return true;
-        }
-
-        // 2. 대기시간 기반 (Latency-based)
-        if (policy.contains("slow") && slowThresholdNanos > 0) {
-            long duration = readableSpan.getEndTimeNanos() - readableSpan.getStartTimeNanos();
-            if (duration >= slowThresholdNanos) {
-                return true;
-            }
-        }
-
-        // 3. 검색/속성 기반 (Search/Attribute-based)
-        if (policy.contains("critical_url") && !criticalUrls.isEmpty()) {
-            String name = readableSpan.getName();
-            for (String url : criticalUrls) {
-                if (name.contains(url)) {
-                    return true;
-                }
-            }
-        }
-
-        // 4. 클러스터링 기반 (Clustering-based)
-        if (policy.contains("cluster") && clusterMinSamples > 0) {
-            String name = readableSpan.getName();
-            java.util.concurrent.atomic.AtomicLong counter = clusterCounters.computeIfAbsent(name, k -> new java.util.concurrent.atomic.AtomicLong(0));
-            if (counter.incrementAndGet() <= clusterMinSamples) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private void offerToQueue(Span span) {
+        boolean offered;
         if (com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
             // 드롭 정책: 큐가 꽉 차면 즉시 드롭 (기본값)
-            if (!queue.offer(span)) {
-                AgentLogger.debug("[BatchSpanProcessor] Queue full, dropping span.");
-            }
+            offered = queue.offer(span);
         } else {
             // 블로킹 정책: 큐에 공간이 생길 때까지 대기 (최대 100ms)
             try {
-                if (!queue.offer(span, 100, TimeUnit.MILLISECONDS)) {
-                    AgentLogger.debug("[BatchSpanProcessor] Queue full after 100ms wait, dropping span.");
-                }
+                offered = queue.offer(span, 100, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                offered = false;
             }
         }
+
+        if (!offered) {
+            long dropped = droppedSpans.incrementAndGet();
+            droppedCounter.increment();
+            AgentLogger.debug("[BatchSpanProcessor] Queue full, dropping span. total_dropped=" + dropped);
+        }
+        // 큐 상태 메트릭 업데이트
+        int qs = queue.size();
+        queueSizeGauge.set(qs);
+        queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
     }
 
     @Override
@@ -164,7 +119,6 @@ public final class BatchSpanProcessor implements SpanProcessor {
         if (!isShutdown.compareAndSet(false, true)) {
             return CompletableResultCode.ofSuccess();
         }
-        samplerResetExecutor.shutdownNow();
         workerThread.interrupt();
         try {
             // 종료 전 잔여 데이터 전송
@@ -173,22 +127,29 @@ public final class BatchSpanProcessor implements SpanProcessor {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        AgentLogger.info("[BatchSpanProcessor] shutdown: exported=" + exportedSpans.get()
+                + " dropped=" + droppedSpans.get());
         exporter.shutdown();
         return CompletableResultCode.ofSuccess();
     }
 
     /**
      * 현재 큐에 쌓인 모든 스팬을 즉시 내보낸다.
+     * 오류 발생 시에도 나머지 배치 처리를 계속한다.
      */
     private void flush() {
         List<Span> batch = new ArrayList<>(maxBatchSize);
-        while (queue.drainTo(batch, maxBatchSize) > 0) {
+        int drained;
+        while ((drained = queue.drainTo(batch, maxBatchSize)) > 0) {
             try {
                 exporter.export(batch);
-                batch.clear();
+                exportedSpans.addAndGet(drained);
             } catch (Throwable t) {
                 AgentLogger.error("[BatchSpanProcessor] Flush error: " + t.getMessage());
-                break;
+                // break 대신 계속 처리 — 이 배치를 포기하고 다음 배치 시도
+                droppedSpans.addAndGet(drained);
+            } finally {
+                batch.clear();
             }
         }
     }
@@ -202,16 +163,31 @@ public final class BatchSpanProcessor implements SpanProcessor {
                     Span firstItem = queue.poll(exportIntervalMs, TimeUnit.MILLISECONDS);
                     if (firstItem != null) {
                         batch.add(firstItem);
-                        queue.drainTo(batch, maxBatchSize - 1);
-                        
-                        exporter.export(batch);
-                        batch.clear();
+                        int extra = queue.drainTo(batch, maxBatchSize - 1);
+                        int batchSize = 1 + extra;
+
+                        try {
+                            exporter.export(batch);
+                            exportedSpans.addAndGet(batchSize);
+                            exportedCounter.add(batchSize);
+                        } catch (Throwable t) {
+                            AgentLogger.error("[BatchSpanProcessor] Export error: " + t.getMessage());
+                            droppedSpans.addAndGet(batchSize);
+                            droppedCounter.add(batchSize);
+                        } finally {
+                            batch.clear();
+                            // 큐 상태 메트릭 갱신 (워커 루프마다 1회)
+                            int qs = queue.size();
+                            queueSizeGauge.set(qs);
+                            queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
+                        }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
                 } catch (Throwable t) {
                     AgentLogger.error("[BatchSpanProcessor] Worker error: " + t.getMessage());
+                    batch.clear();
                 }
             }
         }

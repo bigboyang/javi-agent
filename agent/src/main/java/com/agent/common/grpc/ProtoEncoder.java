@@ -126,6 +126,32 @@ public final class ProtoEncoder {
         writeDouble(out, value);
     }
 
+    // ---- Packed repeated 필드 (히스토그램 버킷) ----
+
+    /**
+     * Packed repeated uint64 필드 (OTLP HistogramDataPoint.bucket_counts).
+     * Wire type = LEN, 각 값을 varint64로 직렬화한다.
+     */
+    public static void writePackedUint64(ByteArrayOutputStream out, int fieldNumber, long[] values) {
+        if (values == null || values.length == 0) return;
+        ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 4);
+        for (long v : values) writeRawVarint64(packed, v);
+        writeTag(out, fieldNumber, WIRE_LEN);
+        writeLengthDelimited(out, packed.toByteArray());
+    }
+
+    /**
+     * Packed repeated double 필드 (OTLP HistogramDataPoint.explicit_bounds).
+     * Wire type = LEN, 각 값을 fixed64(little-endian IEEE 754)로 직렬화한다.
+     */
+    public static void writePackedDouble(ByteArrayOutputStream out, int fieldNumber, double[] values) {
+        if (values == null || values.length == 0) return;
+        ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 8);
+        for (double v : values) writeDouble(packed, v);
+        writeTag(out, fieldNumber, WIRE_LEN);
+        writeLengthDelimited(out, packed.toByteArray());
+    }
+
     // ---- Hex 변환 (traceId / spanId) ----
 
     /**
