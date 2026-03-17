@@ -12,14 +12,20 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * SDK 기본 스팬 구현체.
  *
  * 동시성 안전:
  *  - end() 이중 호출 방지: AtomicBoolean hasEnded
- *  - attributes/events/status 변경: synchronized(lock)
+ *  - attributes: ConcurrentHashMap + AtomicInteger CAS (Datadog 방식 — 글로벌 락 없음)
+ *    limit은 best-effort: 동시 삽입 시 ±1 허용 (성능 우선)
+ *  - events/name/status: synchronized(lock) + 락 내부 isRecording() 재확인 (TOCTOU 방지)
+ *  - status/statusDescription: volatile (쓰기는 락 내부에서만, 읽기는 락 불필요)
+ *  - droppedAttributeCount/droppedEventCount: AtomicInteger (락 불필요)
  *  - endTimeNanos: hasEnded CAS 이후에만 쓰므로 volatile로 충분
  */
 final class SdkSpan implements Span, ReadableSpan {
@@ -35,16 +41,25 @@ final class SdkSpan implements Span, ReadableSpan {
     private final Clock clock;
     private final long startNanoTime;
 
+    // events/name/status 복합 연산 보호 — attributes에는 사용 안 함 (Datadog 방식)
     private final Object lock = new Object();
     private final AtomicBoolean hasEnded = new AtomicBoolean(false);
 
-    // mutable state — all accessed under lock
-    private final Map<AttributeKey<?>, Object> attributes = new LinkedHashMap<>();
+    // Datadog 방식: ConcurrentHashMap + AtomicInteger CAS로 글로벌 락 제거
+    // ConcurrentHashMap은 버킷 단위 분할 잠금으로 다른 키에 대한 동시 쓰기를 허용
+    private final ConcurrentHashMap<AttributeKey<?>, Object> attributes = new ConcurrentHashMap<>();
+    private final AtomicInteger attributeCount = new AtomicInteger(0);
+
+    // events — ArrayList는 thread-safe하지 않으므로 synchronized(lock) 유지
     private final List<SpanEvent> events = new ArrayList<>();
-    private SpanStatus status = SpanStatus.UNSET;
-    private String statusDescription;
-    private int droppedAttributeCount;
-    private int droppedEventCount;
+
+    // volatile: 읽기는 락 없이, 쓰기는 락 내부에서만 수행
+    private volatile SpanStatus status = SpanStatus.UNSET;
+    private volatile String statusDescription;
+
+    // AtomicInteger: 락 없이 안전하게 증가/읽기 가능
+    private final AtomicInteger droppedAttributeCount = new AtomicInteger(0);
+    private final AtomicInteger droppedEventCount = new AtomicInteger(0);
 
     private volatile long endTimeNanos;
     private long endNanoTime;
@@ -103,7 +118,9 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Span updateName(String newName) {
-        if (newName != null && isRecording()) {
+        if (newName == null) return this;
+        synchronized (lock) {
+            if (!isRecording()) return this;
             this.name = newName;
         }
         return this;
@@ -153,22 +170,41 @@ final class SdkSpan implements Span, ReadableSpan {
         return setAttribute(AttributeKey.booleanKey(key), value);
     }
 
+    /**
+     * Datadog 방식: ConcurrentHashMap + AtomicInteger CAS로 글로벌 락 없이 attribute 추가.
+     *
+     * 기존 키 업데이트는 count 변화 없으므로 limit 체크 생략.
+     * 신규 키는 CAS 루프로 슬롯을 선점한 뒤 putIfAbsent로 삽입.
+     * limit은 best-effort: 극히 드문 동시 삽입 경합 시 ±1 허용.
+     */
     @Override
     public <T> Span setAttribute(AttributeKey<T> key, T value) {
-        if (key == null || !isRecording()) {
+        if (key == null || !isRecording()) return this;
+
+        // 기존 키 업데이트: count 변화 없으므로 limit 체크 불필요, 락 없이 ConcurrentHashMap에 바로 덮어쓰기
+        if (attributes.containsKey(key)) {
+            attributes.put(key, value);
             return this;
         }
-        synchronized (lock) {
-            if (attributes.containsKey(key)) {
-                // 덮어쓰기: 크기 변화 없음
-                attributes.put(key, value);
-            } else if (attributes.size() < spanLimits.getMaxAttributes()) {
-                attributes.put(key, value);
-            } else {
-                droppedAttributeCount++;
+
+        // 신규 키: CAS 루프로 슬롯 선점
+        int current;
+        do {
+            current = attributeCount.get();
+            if (current >= spanLimits.getMaxAttributes()) {
+                droppedAttributeCount.incrementAndGet();
                 SpanLogger.debug("span attribute dropped: limit exceeded");
+                return this;
             }
+        } while (!attributeCount.compareAndSet(current, current + 1));
+
+        // 슬롯 선점 성공 — putIfAbsent로 다른 스레드의 동시 삽입 방어
+        if (attributes.putIfAbsent(key, value) != null) {
+            // 다른 스레드가 같은 키를 먼저 삽입 → 카운트 롤백 후 값만 업데이트
+            attributeCount.decrementAndGet();
+            attributes.put(key, value);
         }
+
         return this;
     }
 
@@ -179,10 +215,11 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Span addEvent(String name, Map<AttributeKey<?>, Object> eventAttributes) {
-        if (!isRecording()) return this;
+        // events는 ArrayList(비thread-safe) + 크기 체크+추가 복합 연산 → synchronized 유지
         synchronized (lock) {
+            if (!isRecording()) return this;
             if (events.size() >= spanLimits.getMaxEvents()) {
-                droppedEventCount++;
+                droppedEventCount.incrementAndGet();
                 SpanLogger.debug("span event dropped: limit exceeded");
                 return this;
             }
@@ -194,7 +231,8 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Span recordException(Throwable exception) {
-        if (exception == null || !isRecording()) return this;
+        if (exception == null) return this;
+        // isRecording() 체크는 addEvent 내부의 synchronized 블록에서 수행
         Map<AttributeKey<?>, Object> attrs = new LinkedHashMap<>();
         attrs.put(AttributeKey.stringKey("exception.type"), exception.getClass().getName());
         if (exception.getMessage() != null) {
@@ -206,12 +244,13 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Span setStatus(SpanStatus status, String description) {
-        if (!isRecording()) return this;
+        // status + statusDescription 동시 변경 → 원자성 보장을 위해 synchronized 유지
         synchronized (lock) {
+            if (!isRecording()) return this;
             this.status = status == null ? SpanStatus.UNSET : status;
             this.statusDescription = description;
+            SpanLogger.debug("span status set: " + this.status);
         }
-        SpanLogger.debug("span status set: " + this.status);
         return this;
     }
 
@@ -224,13 +263,8 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public Map<AttributeKey<?>, Object> getAttributes() {
-        // span이 종료된 후에는 더 이상 write가 발생하지 않으므로 복사 불필요
-        if (hasEnded.get()) {
-            return Collections.unmodifiableMap(attributes);
-        }
-        synchronized (lock) {
-            return Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
-        }
+        // ConcurrentHashMap은 항상 thread-safe — hasEnded 분기 불필요, 락 없이 직접 반환
+        return Collections.unmodifiableMap(attributes);
     }
 
     @Override
@@ -251,42 +285,22 @@ final class SdkSpan implements Span, ReadableSpan {
 
     @Override
     public SpanStatus getStatus() {
-        if (hasEnded.get()) {
-            return status;
-        }
-        synchronized (lock) {
-            return status;
-        }
+        return status; // volatile 읽기 — 락 불필요
     }
 
     @Override
     public String getStatusDescription() {
-        if (hasEnded.get()) {
-            return statusDescription;
-        }
-        synchronized (lock) {
-            return statusDescription;
-        }
+        return statusDescription; // volatile 읽기 — 락 불필요
     }
 
     @Override
     public int getDroppedAttributeCount() {
-        if (hasEnded.get()) {
-            return droppedAttributeCount;
-        }
-        synchronized (lock) {
-            return droppedAttributeCount;
-        }
+        return droppedAttributeCount.get(); // AtomicInteger — 락 불필요
     }
 
     @Override
     public int getDroppedEventCount() {
-        if (hasEnded.get()) {
-            return droppedEventCount;
-        }
-        synchronized (lock) {
-            return droppedEventCount;
-        }
+        return droppedEventCount.get(); // AtomicInteger — 락 불필요
     }
 
     AnchoredClock getAnchoredClock() {
