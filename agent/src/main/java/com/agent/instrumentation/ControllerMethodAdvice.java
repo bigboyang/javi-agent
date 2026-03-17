@@ -12,6 +12,8 @@ import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
 import org.slf4j.MDC;
 
+import java.lang.reflect.Method;
+
 /**
  * ByteBuddy advice for Spring MVC controller methods.
  *
@@ -19,6 +21,16 @@ import org.slf4j.MDC;
  *   (예: "GET /users/{id}" — 고카디널리티 방지)
  * http.response.status_code: onExit에서 HttpServletResponse.getStatus()로 추출.
  * http.route / http.scheme / http.host: OTel HTTP 시맨틱 속성 추가.
+ *
+ * Reflection caching design
+ * ─────────────────────────
+ * ByteBuddy inlines @Advice method bodies into the target (app) class, so
+ * Class.forName() inside those bodies runs with the app classloader — which
+ * has Spring on its classpath. The static fields below live in the agent
+ * classloader and are visible to the inlined code. Cache initialisation uses
+ * a double-checked volatile pattern and MUST happen directly inside the
+ * @Advice method bodies; helper methods run in the agent classloader context
+ * where Spring classes are not visible.
  */
 public final class ControllerMethodAdvice {
 
@@ -26,6 +38,34 @@ public final class ControllerMethodAdvice {
     // Spring MVC가 매칭된 라우트 패턴을 request attribute에 저장하는 키
     private static final String BEST_MATCHING_PATTERN_ATTR =
             "org.springframework.web.servlet.HandlerMapping.bestMatchingPattern";
+
+    // ── Cached Class ──────────────────────────────────────────────────────────
+    // Resolved once on first request; Class.forName acquires a classloader lock
+    // so caching here eliminates that cost on every subsequent call.
+    private static volatile Class<?> cachedRchClass;        // RequestContextHolder
+
+    // ── Cached Methods on RequestContextHolder ────────────────────────────────
+    private static volatile Method cachedGetRequestAttributes; // RCH.getRequestAttributes()
+
+    // ── Cached Methods on ServletRequestAttributes (attrs object) ────────────
+    // The concrete type of attrs is ServletRequestAttributes; we look up through
+    // that class on first use and cache the result.
+    private static volatile Method cachedGetRequest;           // attrs.getRequest()
+    private static volatile Method cachedGetResponse;          // attrs.getResponse()
+
+    // ── Cached Methods on HttpServletRequest (req object) ────────────────────
+    // getMethod() on a concrete class searches the full method table; caching
+    // eliminates the search on every subsequent request.
+    private static volatile Method cachedReqGetMethod;         // req.getMethod()
+    private static volatile Method cachedGetRequestURI;        // req.getRequestURI()
+    private static volatile Method cachedGetAttribute;         // req.getAttribute(String)
+    private static volatile Method cachedGetScheme;            // req.getScheme()
+    private static volatile Method cachedGetHeader;            // req.getHeader(String)
+    private static volatile Method cachedGetServerName;        // req.getServerName()
+    private static volatile Method cachedGetServerPort;        // req.getServerPort()
+
+    // ── Cached Methods on HttpServletResponse (response object) ──────────────
+    private static volatile Method cachedGetStatus;            // response.getStatus()
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -46,76 +86,190 @@ public final class ControllerMethodAdvice {
         String host       = null;
         SpanContext remoteParent = null;
 
+        // req is hoisted to this scope so the custom-headers block can reuse it
+        // without a second RequestContextHolder lookup.
+        Object req = null;
+
         try {
-            Class<?> rch = Class.forName(
-                    "org.springframework.web.context.request.RequestContextHolder");
-            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
+            // ── Class.forName cache (runs in app classloader via ByteBuddy inline) ──
+            Class<?> rch = cachedRchClass;
+            if (rch == null) {
+                synchronized (ControllerMethodAdvice.class) {
+                    rch = cachedRchClass;
+                    if (rch == null) {
+                        rch = Class.forName(
+                                "org.springframework.web.context.request.RequestContextHolder");
+                        cachedRchClass = rch;
+                    }
+                }
+            }
+
+            // ── getRequestAttributes() method cache ───────────────────────────────
+            Method mGetRequestAttributes = cachedGetRequestAttributes;
+            if (mGetRequestAttributes == null) {
+                synchronized (ControllerMethodAdvice.class) {
+                    mGetRequestAttributes = cachedGetRequestAttributes;
+                    if (mGetRequestAttributes == null) {
+                        mGetRequestAttributes = rch.getMethod("getRequestAttributes");
+                        cachedGetRequestAttributes = mGetRequestAttributes;
+                    }
+                }
+            }
+
+            Object attrs = mGetRequestAttributes.invoke(null);
             if (attrs != null) {
-                Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
-                httpMethod = (String) req.getClass().getMethod("getMethod").invoke(req);
-                uri        = (String) req.getClass().getMethod("getRequestURI").invoke(req);
 
-                // URL 정규화: bestMatchingPattern → "/users/{id}" 형식
-                try {
-                    Object pattern = req.getClass()
-                            .getMethod("getAttribute", String.class)
-                            .invoke(req, BEST_MATCHING_PATTERN_ATTR);
-                    if (pattern != null) route = pattern.toString();
-                } catch (Throwable ignored) {}
-
-                // http.scheme
-                try {
-                    scheme = (String) req.getClass().getMethod("getScheme").invoke(req);
-                } catch (Throwable ignored) {}
-
-                // http.host — Host 헤더 우선, 없으면 serverName:port 조합
-                try {
-                    host = (String) req.getClass()
-                            .getMethod("getHeader", String.class).invoke(req, "Host");
-                    if (host == null) {
-                        String serverName = (String) req.getClass()
-                                .getMethod("getServerName").invoke(req);
-                        int serverPort = (int) req.getClass()
-                                .getMethod("getServerPort").invoke(req);
-                        host = (serverPort == 80 || serverPort == 443)
-                                ? serverName
-                                : serverName + ":" + serverPort;
+                // ── getRequest() method cache ─────────────────────────────────────
+                Method mGetRequest = cachedGetRequest;
+                if (mGetRequest == null) {
+                    synchronized (ControllerMethodAdvice.class) {
+                        mGetRequest = cachedGetRequest;
+                        if (mGetRequest == null) {
+                            mGetRequest = attrs.getClass().getMethod("getRequest");
+                            cachedGetRequest = mGetRequest;
+                        }
                     }
-                } catch (Throwable ignored) {}
+                }
+                req = mGetRequest.invoke(attrs);
 
-                // 스팬 이름: route 템플릿 우선, 없으면 raw URI
-                spanName = httpMethod + " " + (route != null ? route : uri);
+                if (req != null) {
 
-                // W3C traceparent & baggage 추출
-                try {
-                    java.util.Map<String, String> headers = new java.util.HashMap<>();
-                    String traceparent = (String) req.getClass()
-                            .getMethod("getHeader", String.class).invoke(req, "traceparent");
-                    if (traceparent != null) headers.put("traceparent", traceparent);
-
-                    String tracestate = (String) req.getClass()
-                            .getMethod("getHeader", String.class).invoke(req, "tracestate");
-                    if (tracestate != null) headers.put("tracestate", tracestate);
-
-                    String baggageHeader = (String) req.getClass()
-                            .getMethod("getHeader", String.class).invoke(req, "baggage");
-                    if (baggageHeader != null) headers.put("baggage", baggageHeader);
-
-                    if (traceparent != null) {
-                        com.agent.span.SpanContext extracted =
-                                com.agent.propagation.TraceContextPropagator.extractStatic(
-                                        headers, new com.agent.propagation.MapTextMapGetter());
-                        if (extracted.isValid()) remoteParent = extracted;
+                    // ── req.getMethod() cache ─────────────────────────────────────
+                    Method mReqGetMethod = cachedReqGetMethod;
+                    if (mReqGetMethod == null) {
+                        synchronized (ControllerMethodAdvice.class) {
+                            mReqGetMethod = cachedReqGetMethod;
+                            if (mReqGetMethod == null) {
+                                mReqGetMethod = req.getClass().getMethod("getMethod");
+                                cachedReqGetMethod = mReqGetMethod;
+                            }
+                        }
                     }
+                    httpMethod = (String) mReqGetMethod.invoke(req);
 
-                    com.agent.propagation.Baggage baggage =
-                            com.agent.propagation.ContextPropagators
-                                    .getBaggagePropagator()
-                                    .extract(headers, new com.agent.propagation.MapTextMapGetter());
-                    if (!baggage.isEmpty()) {
-                        com.agent.span.Context.makeCurrent(baggage);
+                    // ── req.getRequestURI() cache ─────────────────────────────────
+                    Method mGetRequestURI = cachedGetRequestURI;
+                    if (mGetRequestURI == null) {
+                        synchronized (ControllerMethodAdvice.class) {
+                            mGetRequestURI = cachedGetRequestURI;
+                            if (mGetRequestURI == null) {
+                                mGetRequestURI = req.getClass().getMethod("getRequestURI");
+                                cachedGetRequestURI = mGetRequestURI;
+                            }
+                        }
                     }
-                } catch (Throwable ignored) {}
+                    uri = (String) mGetRequestURI.invoke(req);
+
+                    // URL 정규화: bestMatchingPattern → "/users/{id}" 형식
+                    try {
+                        Method mGetAttribute = cachedGetAttribute;
+                        if (mGetAttribute == null) {
+                            synchronized (ControllerMethodAdvice.class) {
+                                mGetAttribute = cachedGetAttribute;
+                                if (mGetAttribute == null) {
+                                    mGetAttribute = req.getClass().getMethod("getAttribute", String.class);
+                                    cachedGetAttribute = mGetAttribute;
+                                }
+                            }
+                        }
+                        Object pattern = mGetAttribute.invoke(req, BEST_MATCHING_PATTERN_ATTR);
+                        if (pattern != null) route = pattern.toString();
+                    } catch (Throwable ignored) {}
+
+                    // http.scheme
+                    try {
+                        Method mGetScheme = cachedGetScheme;
+                        if (mGetScheme == null) {
+                            synchronized (ControllerMethodAdvice.class) {
+                                mGetScheme = cachedGetScheme;
+                                if (mGetScheme == null) {
+                                    mGetScheme = req.getClass().getMethod("getScheme");
+                                    cachedGetScheme = mGetScheme;
+                                }
+                            }
+                        }
+                        scheme = (String) mGetScheme.invoke(req);
+                    } catch (Throwable ignored) {}
+
+                    // http.host — Host 헤더 우선, 없으면 serverName:port 조합
+                    try {
+                        Method mGetHeader = cachedGetHeader;
+                        if (mGetHeader == null) {
+                            synchronized (ControllerMethodAdvice.class) {
+                                mGetHeader = cachedGetHeader;
+                                if (mGetHeader == null) {
+                                    mGetHeader = req.getClass().getMethod("getHeader", String.class);
+                                    cachedGetHeader = mGetHeader;
+                                }
+                            }
+                        }
+                        host = (String) mGetHeader.invoke(req, "Host");
+                        if (host == null) {
+                            Method mGetServerName = cachedGetServerName;
+                            if (mGetServerName == null) {
+                                synchronized (ControllerMethodAdvice.class) {
+                                    mGetServerName = cachedGetServerName;
+                                    if (mGetServerName == null) {
+                                        mGetServerName = req.getClass().getMethod("getServerName");
+                                        cachedGetServerName = mGetServerName;
+                                    }
+                                }
+                            }
+                            Method mGetServerPort = cachedGetServerPort;
+                            if (mGetServerPort == null) {
+                                synchronized (ControllerMethodAdvice.class) {
+                                    mGetServerPort = cachedGetServerPort;
+                                    if (mGetServerPort == null) {
+                                        mGetServerPort = req.getClass().getMethod("getServerPort");
+                                        cachedGetServerPort = mGetServerPort;
+                                    }
+                                }
+                            }
+                            String serverName = (String) mGetServerName.invoke(req);
+                            int serverPort    = (int)    mGetServerPort.invoke(req);
+                            host = (serverPort == 80 || serverPort == 443)
+                                    ? serverName
+                                    : serverName + ":" + serverPort;
+                        }
+                    } catch (Throwable ignored) {}
+
+                    // 스팬 이름: route 템플릿 우선, 없으면 raw URI
+                    spanName = httpMethod + " " + (route != null ? route : uri);
+
+                    // W3C traceparent & baggage 추출
+                    // getHeader is already cached above; reuse cachedGetHeader directly.
+                    try {
+                        Method mGetHeader = cachedGetHeader; // already populated above
+                        java.util.Map<String, String> headers = new java.util.HashMap<>();
+                        String traceparent = (String) mGetHeader.invoke(req, "traceparent");
+                        if (traceparent != null) headers.put("traceparent", traceparent);
+
+                        String tracestate = (String) mGetHeader.invoke(req, "tracestate");
+                        if (tracestate != null) headers.put("tracestate", tracestate);
+
+                        String baggageHeader = (String) mGetHeader.invoke(req, "baggage");
+                        if (baggageHeader != null) headers.put("baggage", baggageHeader);
+
+                        if (traceparent != null) {
+                            com.agent.span.SpanContext extracted =
+                                    com.agent.propagation.TraceContextPropagator.extractStatic(
+                                            headers, new com.agent.propagation.MapTextMapGetter());
+                            if (extracted.isValid()) remoteParent = extracted;
+                        }
+
+                        com.agent.propagation.Baggage baggage =
+                                com.agent.propagation.ContextPropagators
+                                        .getBaggagePropagator()
+                                        .extract(headers, new com.agent.propagation.MapTextMapGetter());
+                        if (!baggage.isEmpty()) {
+                            com.agent.span.Context.makeCurrent(baggage);
+                        }
+                    } catch (Throwable ignored) {}
+
+                } else {
+                    int dot = typeName.lastIndexOf('.');
+                    spanName = (dot >= 0 ? typeName.substring(dot + 1) : typeName) + "#" + methodName;
+                }
             } else {
                 int dot = typeName.lastIndexOf('.');
                 spanName = (dot >= 0 ? typeName.substring(dot + 1) : typeName) + "#" + methodName;
@@ -137,24 +291,22 @@ public final class ControllerMethodAdvice {
         if (host != null)       span.setAttribute("http.host", host);
 
         // 원격 설정에서 지정한 커스텀 헤더 캡처
+        // Reuses the req object already resolved in the main block above — no
+        // second RequestContextHolder lookup needed.
         java.util.List<String> customHeaders = remoteConfig.getCustomHeaders();
-        if (!customHeaders.isEmpty()) {
+        if (!customHeaders.isEmpty() && req != null) {
             try {
-                Class<?> rch = Class.forName(
-                        "org.springframework.web.context.request.RequestContextHolder");
-                Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
-                if (attrs != null) {
-                    Object req = attrs.getClass().getMethod("getRequest").invoke(attrs);
-                    for (String header : customHeaders) {
-                        if (HeaderSanitizer.isSensitive(header)) continue;
-                        try {
-                            String val = (String) req.getClass()
-                                    .getMethod("getHeader", String.class).invoke(req, header);
-                            if (val != null) {
-                                span.setAttribute("http.request.header." + header.toLowerCase(), val);
-                            }
-                        } catch (Throwable ignored) {}
-                    }
+                // cachedGetHeader is guaranteed to be populated if req != null,
+                // since the main block above initialised it before we reach here.
+                Method mGetHeader = cachedGetHeader;
+                for (String header : customHeaders) {
+                    if (HeaderSanitizer.isSensitive(header)) continue;
+                    try {
+                        String val = (String) mGetHeader.invoke(req, header);
+                        if (val != null) {
+                            span.setAttribute("http.request.header." + header.toLowerCase(), val);
+                        }
+                    } catch (Throwable ignored) {}
                 }
             } catch (Throwable ignored) {}
         }
@@ -180,14 +332,62 @@ public final class ControllerMethodAdvice {
         if (state == null) return;
 
         // http.response.status_code: HttpServletResponse.getStatus()로 추출
+        // Reuses cachedRchClass / cachedGetRequestAttributes populated by onEnter.
         try {
-            Class<?> rch = Class.forName(
-                    "org.springframework.web.context.request.RequestContextHolder");
-            Object attrs = rch.getMethod("getRequestAttributes").invoke(null);
+            Class<?> rch = cachedRchClass;
+            if (rch == null) {
+                synchronized (ControllerMethodAdvice.class) {
+                    rch = cachedRchClass;
+                    if (rch == null) {
+                        rch = Class.forName(
+                                "org.springframework.web.context.request.RequestContextHolder");
+                        cachedRchClass = rch;
+                    }
+                }
+            }
+
+            Method mGetRequestAttributes = cachedGetRequestAttributes;
+            if (mGetRequestAttributes == null) {
+                synchronized (ControllerMethodAdvice.class) {
+                    mGetRequestAttributes = cachedGetRequestAttributes;
+                    if (mGetRequestAttributes == null) {
+                        mGetRequestAttributes = rch.getMethod("getRequestAttributes");
+                        cachedGetRequestAttributes = mGetRequestAttributes;
+                    }
+                }
+            }
+
+            Object attrs = mGetRequestAttributes.invoke(null);
             if (attrs != null) {
-                Object response = attrs.getClass().getMethod("getResponse").invoke(attrs);
+
+                // ── getResponse() method cache ────────────────────────────────────
+                Method mGetResponse = cachedGetResponse;
+                if (mGetResponse == null) {
+                    synchronized (ControllerMethodAdvice.class) {
+                        mGetResponse = cachedGetResponse;
+                        if (mGetResponse == null) {
+                            mGetResponse = attrs.getClass().getMethod("getResponse");
+                            cachedGetResponse = mGetResponse;
+                        }
+                    }
+                }
+
+                Object response = mGetResponse.invoke(attrs);
                 if (response != null) {
-                    int statusCode = (int) response.getClass().getMethod("getStatus").invoke(response);
+
+                    // ── response.getStatus() method cache ─────────────────────────
+                    Method mGetStatus = cachedGetStatus;
+                    if (mGetStatus == null) {
+                        synchronized (ControllerMethodAdvice.class) {
+                            mGetStatus = cachedGetStatus;
+                            if (mGetStatus == null) {
+                                mGetStatus = response.getClass().getMethod("getStatus");
+                                cachedGetStatus = mGetStatus;
+                            }
+                        }
+                    }
+
+                    int statusCode = (int) mGetStatus.invoke(response);
                     state.span.setAttribute("http.response.status_code", String.valueOf(statusCode));
                     // 4xx/5xx — exception 없이도 에러로 표시 (error rate 계산용)
                     if (statusCode >= 400 && error == null) {
