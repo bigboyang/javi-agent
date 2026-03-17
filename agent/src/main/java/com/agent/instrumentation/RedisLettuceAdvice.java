@@ -22,7 +22,12 @@ import net.bytebuddy.asm.Advice;
 public final class RedisLettuceAdvice {
 
     // ChannelHandlerContext 필드 캐싱 (DCL 패턴)
-    private static volatile java.lang.reflect.Field CTX_FIELD = null;
+    private static volatile java.lang.reflect.Field  CTX_FIELD          = null;
+    // channel() / remoteAddress() 메서드 캐싱 — 매 Redis 호출마다 getMethod() 조회 제거
+    private static volatile java.lang.reflect.Method CHANNEL_METHOD      = null;
+    private static volatile java.lang.reflect.Method REMOTE_ADDR_METHOD  = null;
+    // getType() 메서드 캐싱 — command 타입은 Lettuce 내부 고정 클래스이므로 1회 캐싱으로 충분
+    private static volatile java.lang.reflect.Method GET_TYPE_METHOD     = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -35,7 +40,12 @@ public final class RedisLettuceAdvice {
 
         String commandName = "REDIS";
         try {
-            Object type = command.getClass().getMethod("getType").invoke(command);
+            java.lang.reflect.Method mGetType = GET_TYPE_METHOD;
+            if (mGetType == null) {
+                mGetType = command.getClass().getMethod("getType");
+                GET_TYPE_METHOD = mGetType;
+            }
+            Object type = mGetType.invoke(command);
             if (type != null) commandName = type.toString();
         } catch (Throwable ignored) {}
 
@@ -92,10 +102,22 @@ public final class RedisLettuceAdvice {
             Object ctx = ctxField.get(handler);
             if (ctx == null) return;
 
-            Object channel = ctx.getClass().getMethod("channel").invoke(ctx);
+            // channel() 메서드 캐싱
+            java.lang.reflect.Method mChannel = CHANNEL_METHOD;
+            if (mChannel == null) {
+                mChannel = ctx.getClass().getMethod("channel");
+                CHANNEL_METHOD = mChannel;
+            }
+            Object channel = mChannel.invoke(ctx);
             if (channel == null) return;
 
-            Object remoteAddr = channel.getClass().getMethod("remoteAddress").invoke(channel);
+            // remoteAddress() 메서드 캐싱
+            java.lang.reflect.Method mRemoteAddr = REMOTE_ADDR_METHOD;
+            if (mRemoteAddr == null) {
+                mRemoteAddr = channel.getClass().getMethod("remoteAddress");
+                REMOTE_ADDR_METHOD = mRemoteAddr;
+            }
+            Object remoteAddr = mRemoteAddr.invoke(channel);
             if (remoteAddr instanceof java.net.InetSocketAddress) {
                 java.net.InetSocketAddress addr = (java.net.InetSocketAddress) remoteAddr;
                 span.setAttribute("net.peer.name", addr.getHostString());

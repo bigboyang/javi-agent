@@ -13,9 +13,12 @@ import java.util.regex.Pattern;
  */
 public final class SqlSanitizer {
 
-    private static final Pattern NUMBER_PATTERN = Pattern.compile("\\b\\d+\\b");
-    private static final Pattern STRING_PATTERN = Pattern.compile("'[^']*'");
-    private static final Pattern HEX_PATTERN = Pattern.compile("\\b0x[0-9a-fA-F]+\\b");
+    /**
+     * 단일 얼터네이션 패턴 — SQL을 한 번만 스캔하여 3종 리터럴을 모두 치환.
+     * 순서: 문자열 리터럴 우선(내부 숫자 오치환 방지) → 16진수 → 10진수.
+     */
+    private static final Pattern LITERAL_PATTERN =
+            Pattern.compile("'[^']*'|\\b0x[0-9a-fA-F]+\\b|\\b\\d+\\b");
 
     /**
      * SQL 쿼리를 마스킹 처리한다.
@@ -27,20 +30,7 @@ public final class SqlSanitizer {
         if (sql == null || sql.isEmpty()) {
             return sql;
         }
-
-        String result = sql;
-        
-        // 1. 문자열 리터럴 마스킹 ('value' -> ?)
-        result = STRING_PATTERN.matcher(result).replaceAll("?");
-        
-        // 2. 숫자 리터럴 마스킹 (123 -> ?)
-        // 주의: 식별자에 포함된 숫자는 제외해야 함. 여기서는 단순화하여 공백/연산자 사이의 숫자만 처리.
-        result = NUMBER_PATTERN.matcher(result).replaceAll("?");
-        
-        // 3. 16진수 리터럴 마스킹 (0xabc -> ?)
-        result = HEX_PATTERN.matcher(result).replaceAll("?");
-
-        return result;
+        return LITERAL_PATTERN.matcher(sql).replaceAll("?");
     }
 
     private SqlSanitizer() {}

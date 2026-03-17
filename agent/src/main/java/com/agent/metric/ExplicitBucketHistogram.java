@@ -44,7 +44,9 @@ public final class ExplicitBucketHistogram {
     private final String description;
     private final String unit;
     private final Map<String, String> attributes;
-    private final long[] boundaries;
+    private final long[]   boundaries;
+    /** boundaries의 double[] 변환 캐시 — scrapeAndEmit 루프마다 재할당 제거 */
+    private final double[] doubleBoundaries;
     private final LongAdder[] bucketCounts;
     private final LongAdder overflowCount;
     private final LongAdder totalCount;
@@ -79,6 +81,8 @@ public final class ExplicitBucketHistogram {
         this.unit       = unit != null ? unit : "1";
         this.attributes = attributes != null ? attributes : Collections.emptyMap();
         this.boundaries = boundaries;
+        this.doubleBoundaries = new double[boundaries.length];
+        for (int i = 0; i < boundaries.length; i++) this.doubleBoundaries[i] = boundaries[i];
         this.bucketCounts = new LongAdder[boundaries.length];
         for (int i = 0; i < boundaries.length; i++) {
             bucketCounts[i] = new LongAdder();
@@ -219,7 +223,8 @@ public final class ExplicitBucketHistogram {
         return result;
     }
 
-    public long[]              getBoundaries() { return boundaries; }
+    public long[]              getBoundaries()       { return boundaries; }
+    public double[]            getDoubleBoundaries() { return doubleBoundaries; }
     public long                getCount()      { return totalCount.sum(); }
     public long                getSum()        { return totalSum.sum(); }
     public long                getMin()        { long v = minValue.get(); return v == Long.MAX_VALUE ? 0 : v; }

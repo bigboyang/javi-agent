@@ -1,0 +1,5 @@
+com/agent/trace/SdkTracerProviderTest.class
+com/agent/TestApp.class
+com/agent/trace/processor/BatchSpanProcessorTest.class
+com/agent/common/ResourceInfoTest.class
+com/agent/sampler/SamplerTest.class

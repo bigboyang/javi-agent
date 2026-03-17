@@ -9,6 +9,10 @@ import com.agent.span.SpanStatus;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * ByteBuddy advice for JDBC PreparedStatement execute methods (no SQL argument).
  *
@@ -17,31 +21,36 @@ import net.bytebuddy.asm.Advice;
  * db.system: JdbcStatementAdvice 공유 헬퍼를 통해 실제 DB 벤더 감지.
  * db.name, net.peer.name, net.peer.port: JDBC URL 파싱으로 추출.
  * db.user: Connection.getMetaData().getUserName().
+ *
+ * 성능 최적화:
+ *  - getDeclaredFields() 전체 스캔을 제거하고 Field를 클래스별로 캐싱
+ *  - getConnection 메서드도 클래스별로 캐싱 (JdbcStatementAdvice 공유 캐시 활용)
+ *  - DB 메트릭 기록을 JdbcStatementAdvice 공유 메서드로 위임하여 캐시 공유
  */
 public final class JdbcPreparedStatementAdvice {
+
+    /**
+     * PreparedStatement 클래스별 sql/originalSql 필드 캐시.
+     *
+     * <p>값이 ABSENT_SENTINEL 이면 해당 클래스에 sql 필드가 없다는 뜻이므로
+     * getDeclaredFields() 재스캔을 방지한다.
+     */
+    private static final ConcurrentHashMap<Class<?>, Field> SQL_FIELD_CACHE = new ConcurrentHashMap<>(4);
+    private static final Field ABSENT_SENTINEL;
+    static {
+        try {
+            ABSENT_SENTINEL = JdbcPreparedStatementAdvice.class.getDeclaredField("ABSENT_SENTINEL");
+        } catch (NoSuchFieldException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(@Advice.This Object preparedStatement) {
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.jdbc");
 
-        // SQL 추출: 필드 직접 접근 → toString() fallback
-        String sql = "PreparedStatement";
-        if (preparedStatement != null) {
-            try {
-                java.lang.reflect.Field[] fields = preparedStatement.getClass().getDeclaredFields();
-                for (java.lang.reflect.Field f : fields) {
-                    if ("sql".equals(f.getName()) || "originalSql".equals(f.getName())) {
-                        f.setAccessible(true);
-                        Object val = f.get(preparedStatement);
-                        if (val instanceof String) { sql = (String) val; break; }
-                    }
-                }
-            } catch (Throwable ignored) {}
-            if ("PreparedStatement".equals(sql)) {
-                String str = preparedStatement.toString();
-                if (str != null) sql = str;
-            }
-        }
+        // SQL 추출: 클래스별 캐싱된 Field 우선, 없으면 toString() fallback
+        String sql = extractSql(preparedStatement);
 
         String maskedSql = SqlSanitizer.sanitize(sql);
         String spanName = maskedSql.length() > 60
@@ -50,11 +59,17 @@ public final class JdbcPreparedStatementAdvice {
         Span span = tracer.spanBuilder(spanName).setSpanKind(SpanKind.CLIENT).startSpan();
         span.setAttribute("db.query.text", maskedSql);
 
-        // DB 메타데이터 추출
+        // DB 메타데이터 추출 — JdbcStatementAdvice의 캐시 공유
         String dbSystem = "other_sql";
         if (preparedStatement != null) {
             try {
-                Object conn = preparedStatement.getClass().getMethod("getConnection").invoke(preparedStatement);
+                Class<?> psClass = preparedStatement.getClass();
+                Method mGetConn = JdbcStatementAdvice.GET_CONNECTION_CACHE.get(psClass);
+                if (mGetConn == null) {
+                    mGetConn = psClass.getMethod("getConnection");
+                    JdbcStatementAdvice.GET_CONNECTION_CACHE.put(psClass, mGetConn);
+                }
+                Object conn = mGetConn.invoke(preparedStatement);
                 if (conn != null) dbSystem = JdbcStatementAdvice.extractConnMetadata(conn, span);
             } catch (Throwable ignored) {}
         }
@@ -77,23 +92,51 @@ public final class JdbcPreparedStatementAdvice {
         }
         state.scope.close();
         state.span.end();
-        recordDbMetrics(state, error);
+        // JdbcStatementAdvice 공유 메서드 — 캐시 공유로 이중 등록 없음
+        JdbcStatementAdvice.recordDbMetrics(state.dbSystem, state.dbOperation, state.startNano, error);
     }
 
-    private static void recordDbMetrics(State state, Throwable error) {
-        try {
-            long durationMs = (System.nanoTime() - state.startNano) / 1_000_000L;
-            java.util.Map<String, String> tags = new java.util.HashMap<>(4);
-            tags.put("db.system", state.dbSystem);
-            tags.put("db.operation", state.dbOperation);
+    /**
+     * PreparedStatement 구현체에서 SQL 문자열을 추출한다.
+     *
+     * <p>클래스별로 Field를 캐싱하여 getDeclaredFields() 전체 스캔을
+     * 최초 1회로 제한한다.
+     */
+    private static String extractSql(Object preparedStatement) {
+        if (preparedStatement == null) return "PreparedStatement";
 
-            com.agent.metric.MetricRegistry reg = com.agent.metric.MetricRegistry.get();
-            reg.counter("db.client.operation.count", tags).increment();
-            reg.histogram("db.client.operation.duration", tags).record(durationMs);
-            if (error != null) {
-                reg.counter("db.client.operation.error.count", tags).increment();
+        Class<?> psClass = preparedStatement.getClass();
+        Field sqlField = SQL_FIELD_CACHE.get(psClass);
+
+        if (sqlField == null) {
+            // 최초 진입: 클래스 계층에서 sql/originalSql 필드 검색
+            Field found = null;
+            Class<?> clazz = psClass;
+            outer:
+            while (clazz != null) {
+                for (Field f : clazz.getDeclaredFields()) {
+                    if ("sql".equals(f.getName()) || "originalSql".equals(f.getName())) {
+                        f.setAccessible(true);
+                        found = f;
+                        break outer;
+                    }
+                }
+                clazz = clazz.getSuperclass();
             }
-        } catch (Throwable ignored) {}
+            sqlField = (found != null) ? found : ABSENT_SENTINEL;
+            SQL_FIELD_CACHE.put(psClass, sqlField);
+        }
+
+        if (sqlField != ABSENT_SENTINEL) {
+            try {
+                Object val = sqlField.get(preparedStatement);
+                if (val instanceof String) return (String) val;
+            } catch (Throwable ignored) {}
+        }
+
+        // toString() fallback
+        String str = preparedStatement.toString();
+        return (str != null) ? str : "PreparedStatement";
     }
 
     public static final class State {

@@ -39,6 +39,15 @@ public final class ControllerMethodAdvice {
     private static final String BEST_MATCHING_PATTERN_ATTR =
             "org.springframework.web.servlet.HandlerMapping.bestMatchingPattern";
 
+    // ── 메트릭 직접 레퍼런스 캐시 ("method|route" → Counter/Histogram) ────────
+    // 매 요청마다 HashMap + MetricKey + TreeMap 생성을 제거한다 (Datadog 동일 패턴).
+    private static final java.util.concurrent.ConcurrentHashMap<String, com.agent.metric.Counter>
+            HTTP_COUNT_CACHE     = new java.util.concurrent.ConcurrentHashMap<>(32);
+    private static final java.util.concurrent.ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram>
+            HTTP_DUR_CACHE       = new java.util.concurrent.ConcurrentHashMap<>(32);
+    private static final java.util.concurrent.ConcurrentHashMap<String, com.agent.metric.Counter>
+            HTTP_ERR_COUNT_CACHE = new java.util.concurrent.ConcurrentHashMap<>(32);
+
     // ── Cached Class ──────────────────────────────────────────────────────────
     // Resolved once on first request; Class.forName acquires a classloader lock
     // so caching here eliminates that cost on every subsequent call.
@@ -237,32 +246,37 @@ public final class ControllerMethodAdvice {
                     spanName = httpMethod + " " + (route != null ? route : uri);
 
                     // W3C traceparent & baggage 추출
-                    // getHeader is already cached above; reuse cachedGetHeader directly.
+                    // traceparent가 없는 요청(대부분)은 HashMap 할당 자체를 건너뜀 (fast-path).
                     try {
                         Method mGetHeader = cachedGetHeader; // already populated above
-                        java.util.Map<String, String> headers = new java.util.HashMap<>();
                         String traceparent = (String) mGetHeader.invoke(req, "traceparent");
-                        if (traceparent != null) headers.put("traceparent", traceparent);
-
-                        String tracestate = (String) mGetHeader.invoke(req, "tracestate");
-                        if (tracestate != null) headers.put("tracestate", tracestate);
-
                         String baggageHeader = (String) mGetHeader.invoke(req, "baggage");
-                        if (baggageHeader != null) headers.put("baggage", baggageHeader);
 
-                        if (traceparent != null) {
-                            com.agent.span.SpanContext extracted =
-                                    com.agent.propagation.TraceContextPropagator.extractStatic(
-                                            headers, new com.agent.propagation.MapTextMapGetter());
-                            if (extracted.isValid()) remoteParent = extracted;
-                        }
+                        if (traceparent != null || baggageHeader != null) {
+                            // 전파 헤더가 있을 때만 Map 할당
+                            java.util.Map<String, String> headers = new java.util.HashMap<>(4);
+                            if (traceparent != null) headers.put("traceparent", traceparent);
 
-                        com.agent.propagation.Baggage baggage =
-                                com.agent.propagation.ContextPropagators
-                                        .getBaggagePropagator()
-                                        .extract(headers, new com.agent.propagation.MapTextMapGetter());
-                        if (!baggage.isEmpty()) {
-                            com.agent.span.Context.makeCurrent(baggage);
+                            if (traceparent != null) {
+                                String tracestate = (String) mGetHeader.invoke(req, "tracestate");
+                                if (tracestate != null) headers.put("tracestate", tracestate);
+                            }
+                            if (baggageHeader != null) headers.put("baggage", baggageHeader);
+
+                            if (traceparent != null) {
+                                com.agent.span.SpanContext extracted =
+                                        com.agent.propagation.TraceContextPropagator.extractStatic(
+                                                headers, new com.agent.propagation.MapTextMapGetter());
+                                if (extracted.isValid()) remoteParent = extracted;
+                            }
+
+                            com.agent.propagation.Baggage baggage =
+                                    com.agent.propagation.ContextPropagators
+                                            .getBaggagePropagator()
+                                            .extract(headers, new com.agent.propagation.MapTextMapGetter());
+                            if (!baggage.isEmpty()) {
+                                com.agent.span.Context.makeCurrent(baggage);
+                            }
                         }
                     } catch (Throwable ignored) {}
 
@@ -416,25 +430,32 @@ public final class ControllerMethodAdvice {
         try {
             if (state.route == null) return;
             long durationMs = (System.nanoTime() - state.startNano) / 1_000_000L;
-            String method = state.httpMethod != null ? state.httpMethod : "UNKNOWN";
+            final String method   = state.httpMethod != null ? state.httpMethod : "UNKNOWN";
+            final String route    = state.route;
+            final String cacheKey = method + "|" + route;
 
-            // 요청 count 태그: method + route (카디널리티 제어)
-            java.util.Map<String, String> countTags = new java.util.HashMap<>(4);
-            countTags.put("http.request.method", method);
-            countTags.put("http.route", state.route);
+            // Counter/Histogram 레퍼런스를 직접 캐싱 — HashMap+MetricKey+TreeMap 생성 제거
+            HTTP_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
+                java.util.Map<String, String> tags = new java.util.HashMap<>(4);
+                tags.put("http.request.method", method);
+                tags.put("http.route", route);
+                return com.agent.metric.MetricRegistry.get().counter("http.server.request.count", tags);
+            }).increment();
 
-            com.agent.metric.MetricRegistry reg = com.agent.metric.MetricRegistry.get();
-            reg.counter("http.server.request.count", countTags).increment();
+            HTTP_DUR_CACHE.computeIfAbsent(cacheKey, k -> {
+                java.util.Map<String, String> tags = new java.util.HashMap<>(4);
+                tags.put("http.request.method", method);
+                tags.put("http.route", route);
+                return com.agent.metric.MetricRegistry.get().histogram("http.server.request.duration", tags);
+            }).record(durationMs);
 
-            // latency 히스토그램 태그: method + route (status는 카디널리티가 낮으므로 추가 가능)
-            java.util.Map<String, String> durTags = new java.util.HashMap<>(4);
-            durTags.put("http.request.method", method);
-            durTags.put("http.route", state.route);
-            reg.histogram("http.server.request.duration", durTags).record(durationMs);
-
-            // 에러 카운터 (5xx or exception)
             if (error != null) {
-                reg.counter("http.server.request.error.count", countTags).increment();
+                HTTP_ERR_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
+                    java.util.Map<String, String> tags = new java.util.HashMap<>(4);
+                    tags.put("http.request.method", method);
+                    tags.put("http.route", route);
+                    return com.agent.metric.MetricRegistry.get().counter("http.server.request.error.count", tags);
+                }).increment();
             }
         } catch (Throwable ignored) {}
     }
