@@ -22,8 +22,13 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,7 +45,7 @@ import javax.net.ssl.TrustManagerFactory;
  *   <li>protobuf 인코딩 유지 — JSON 오버헤드 없음</li>
  *   <li>Content-Type: application/x-protobuf (OTLP/HTTP 표준)</li>
  *   <li>gRPC 5-byte 프레이밍 없음 — raw protobuf bytes 직접 전송</li>
- *   <li>지수 백오프 재시도: 5xx / 네트워크 오류에만 적용, 4xx는 즉시 실패</li>
+ *   <li>비동기 재시도: sendAsync() + ScheduledExecutorService (Thread.sleep 없음)</li>
  *   <li>Circuit Breaker: 연속 실패 5회 → OPEN, 30s 후 HALF_OPEN 프로브</li>
  *   <li>TLS/mTLS: JAVI_TLS_CA_PATH, JAVI_TLS_CLIENT_CERT_PATH, JAVI_TLS_CLIENT_KEY_PATH</li>
  * </ul>
@@ -61,10 +66,13 @@ public final class GrpcSender {
     private static final String PROP_GRPC_ENDPOINT = "javi.grpc.endpoint";
     private static final String DEFAULT_ENDPOINT   = "http://localhost:4318";
 
-    /** 재시도 간격 (ms): attempt 0=즉시, 1=1s, 2=2s (Circuit Breaker가 빠른 실패를 담당) */
+    /**
+     * 재시도 간격 (ms): attempt 0=즉시, 1=1s, 2=2s
+     * Thread.sleep 대신 ScheduledExecutorService.schedule() 로 적용된다.
+     */
     private static final long[] RETRY_BACKOFF_MS = {0L, 1_000L, 2_000L};
 
-    /** 최대 재시도 횟수 (Circuit Breaker 적용 시 실질적으로 단축됨) */
+    /** 최대 재시도 횟수 */
     private static final int MAX_ATTEMPTS = 3;
 
     // ---- Circuit Breaker ----
@@ -88,6 +96,12 @@ public final class GrpcSender {
     private final Map<String, String> extraHeaders;
     private final boolean gzipEnabled;
 
+    /**
+     * 비동기 재시도 스케줄러 (Thread.sleep 대신 schedule() 사용).
+     * 단일 데몬 스레드로 충분 — 재시도 지연 등록만 하며 실제 I/O는 HttpClient 풀이 담당.
+     */
+    private final ScheduledExecutorService retryScheduler;
+
     // ---- 생성자 ----
 
     private GrpcSender(String baseEndpoint, long timeoutMs) {
@@ -96,15 +110,24 @@ public final class GrpcSender {
         this.extraHeaders  = parseHeaders();
         this.gzipEnabled   = resolveGzipEnabled();
 
-        ThreadFactory daemon = r -> {
+        ThreadFactory httpDaemon = r -> {
             Thread t = new Thread(r, "javi-grpc-sender");
             t.setDaemon(true);
             return t;
         };
+        ThreadFactory retryDaemon = r -> {
+            Thread t = new Thread(r, "javi-grpc-retry");
+            t.setDaemon(true);
+            return t;
+        };
+
+        // retryScheduler: 재시도 지연 등록 전용 (단일 스레드)
+        this.retryScheduler = Executors.newSingleThreadScheduledExecutor(retryDaemon);
+
         HttpClient.Builder clientBuilder = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(5))
-                .executor(Executors.newFixedThreadPool(2, daemon));
+                .executor(Executors.newFixedThreadPool(2, httpDaemon));
 
         boolean tlsEnabled = this.baseEndpoint.startsWith("https://")
                 || Boolean.parseBoolean(env("JAVI_TLS_ENABLED", "false"));
@@ -130,14 +153,18 @@ public final class GrpcSender {
         return new GrpcSender(baseEndpoint, timeoutMs);
     }
 
-    // ---- 핵심 전송 ----
+    // ---- 핵심 전송 (동기 래퍼) ----
 
     /**
-     * gRPC 서비스 경로로 protobuf 페이로드를 전송한다.
+     * gRPC 서비스 경로로 protobuf 페이로드를 전송한다. (동기 래퍼)
+     *
+     * <p>내부적으로 {@link #sendAsync}를 호출하고 결과를 대기한다.
+     * 호출 스레드는 future.get() 에서만 대기하며, Thread.sleep() 은 사용하지 않는다.
+     * 재시도 백오프 지연은 retryScheduler(별도 데몬 스레드)가 처리한다.
      *
      * @param grpcPath gRPC 서비스 경로
      *                 (예: /opentelemetry.proto.collector.trace.v1.TraceService/Export)
-     * @param protoBody 직렬화된 protobuf bytes (5-byte 프레임 전 raw proto)
+     * @param protoBody 직렬화된 protobuf bytes
      */
     public SendResult send(String grpcPath, byte[] protoBody) {
         if (isShutdown.get()) {
@@ -146,6 +173,37 @@ public final class GrpcSender {
         }
         if (protoBody == null || protoBody.length == 0) {
             return SendResult.SUCCESS;
+        }
+        // 최대 대기: (timeoutMs + 최대 백오프) × 재시도 + 여유 1초
+        long maxWaitMs = (timeoutMs + RETRY_BACKOFF_MS[MAX_ATTEMPTS - 1]) * MAX_ATTEMPTS + 1_000L;
+        try {
+            return sendAsync(grpcPath, protoBody).get(maxWaitMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            AgentLogger.warn("GrpcSender: send timeout path=" + grpcPath);
+            onSendFailure(grpcPath);
+            return SendResult.FAILURE;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return SendResult.FAILURE;
+        } catch (ExecutionException e) {
+            AgentLogger.warn("GrpcSender: send execution error path=" + grpcPath
+                    + " cause=" + unwrapCause(e));
+            return SendResult.FAILURE;
+        }
+    }
+
+    /**
+     * gRPC 서비스 경로로 protobuf 페이로드를 비동기 전송한다.
+     *
+     * <p>재시도 백오프는 Thread.sleep 없이 {@code retryScheduler.schedule()}로 처리한다.
+     * 반환된 CompletableFuture는 모든 재시도 완료 후 최종 {@link SendResult}로 완성된다.
+     */
+    public CompletableFuture<SendResult> sendAsync(String grpcPath, byte[] protoBody) {
+        if (isShutdown.get()) {
+            return CompletableFuture.completedFuture(SendResult.SHUTDOWN);
+        }
+        if (protoBody == null || protoBody.length == 0) {
+            return CompletableFuture.completedFuture(SendResult.SUCCESS);
         }
 
         // ---- Circuit Breaker 체크 ----
@@ -156,7 +214,7 @@ public final class GrpcSender {
                 AgentLogger.debug("GrpcSender: circuit OPEN — 전송 차단 path=" + grpcPath
                         + " (쿨다운 남음=" + (CB_COOLDOWN_MS - elapsed) / 1000 + "s)");
                 recordCbMetric(CbState.OPEN);
-                return SendResult.FAILURE;
+                return CompletableFuture.completedFuture(SendResult.FAILURE);
             }
             // 쿨다운 만료 → HALF_OPEN 프로브 허용 (CAS로 단 하나의 스레드만 전환)
             if (cbState.compareAndSet(CbState.OPEN, CbState.HALF_OPEN)) {
@@ -164,61 +222,99 @@ public final class GrpcSender {
             }
         }
 
-        URI uri = URI.create(baseEndpoint + grpcPath);
         byte[] body = maybeGzip(protoBody);
+        CompletableFuture<SendResult> resultFuture = new CompletableFuture<>();
+        doAttempt(grpcPath, body, 0, resultFuture);
+        return resultFuture;
+    }
 
-        for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-            if (attempt > 0 && !sleepUninterruptibly(RETRY_BACKOFF_MS[attempt])) {
-                return SendResult.FAILURE;
-            }
-            try {
-                HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
-                        .uri(uri)
-                        .timeout(Duration.ofMillis(timeoutMs))
-                        .header("content-type", "application/x-protobuf")
-                        .POST(HttpRequest.BodyPublishers.ofByteArray(body));
-                if (gzipEnabled) {
-                    reqBuilder.header("content-encoding", "gzip");
-                }
-                for (Map.Entry<String, String> h : extraHeaders.entrySet()) {
-                    reqBuilder.header(h.getKey(), h.getValue());
-                }
-                HttpRequest request = reqBuilder.build();
-
-                HttpResponse<Void> response = httpClient.send(
-                        request, HttpResponse.BodyHandlers.discarding());
-
-                int status = response.statusCode();
-
-                if (status == 200) {
-                    // 성공 → Circuit Breaker 리셋
-                    onSendSuccess(grpcPath, body.length);
-                    return SendResult.SUCCESS;
-                }
-
-                if (status >= 400 && status < 500) {
-                    AgentLogger.warn("gRPC send rejected (4xx=" + status + ") path=" + grpcPath
-                            + " — 재시도 없음");
-                    // 4xx는 서버 거부 (클라이언트 오류) — CB 카운트 대상 아님
-                    return SendResult.FAILURE;
-                }
-
-                AgentLogger.warn("gRPC send failed (status=" + status + ") attempt="
-                        + (attempt + 1) + "/" + MAX_ATTEMPTS + " path=" + grpcPath);
-
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-                AgentLogger.warn("gRPC send interrupted path=" + grpcPath);
-                return SendResult.FAILURE;
-            } catch (Exception e) {
-                AgentLogger.warn("gRPC send error attempt=" + (attempt + 1) + "/" + MAX_ATTEMPTS
-                        + " path=" + grpcPath + " cause=" + e.getMessage());
-            }
+    /**
+     * 단일 HTTP 시도를 비동기로 실행한다.
+     * 실패 시 retryScheduler 를 통해 다음 attempt 를 예약하므로 Thread.sleep() 이 없다.
+     */
+    private void doAttempt(String grpcPath, byte[] body,
+                            int attempt, CompletableFuture<SendResult> resultFuture) {
+        if (isShutdown.get()) {
+            resultFuture.complete(SendResult.SHUTDOWN);
+            return;
+        }
+        if (attempt >= MAX_ATTEMPTS) {
+            onSendFailure(grpcPath);
+            resultFuture.complete(SendResult.FAILURE);
+            return;
         }
 
-        // 모든 재시도 소진 → Circuit Breaker 실패 카운트 업데이트
-        onSendFailure(grpcPath);
-        return SendResult.FAILURE;
+        long delayMs = RETRY_BACKOFF_MS[attempt];
+
+        Runnable sendTask = () -> {
+            if (isShutdown.get()) {
+                resultFuture.complete(SendResult.SHUTDOWN);
+                return;
+            }
+            URI uri = URI.create(baseEndpoint + grpcPath);
+            HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
+                    .uri(uri)
+                    .timeout(Duration.ofMillis(timeoutMs))
+                    .header("content-type", "application/x-protobuf")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+            if (gzipEnabled) {
+                reqBuilder.header("content-encoding", "gzip");
+            }
+            for (Map.Entry<String, String> h : extraHeaders.entrySet()) {
+                reqBuilder.header(h.getKey(), h.getValue());
+            }
+
+            httpClient.sendAsync(reqBuilder.build(), HttpResponse.BodyHandlers.discarding())
+                    .whenComplete((response, ex) -> {
+                        if (isShutdown.get()) {
+                            resultFuture.complete(SendResult.SHUTDOWN);
+                            return;
+                        }
+                        if (ex != null) {
+                            AgentLogger.warn("gRPC send error attempt=" + (attempt + 1)
+                                    + "/" + MAX_ATTEMPTS + " path=" + grpcPath
+                                    + " cause=" + unwrapCause(ex));
+                            scheduleNextAttempt(grpcPath, body, attempt + 1, resultFuture);
+                            return;
+                        }
+                        int status = response.statusCode();
+                        if (status == 200) {
+                            onSendSuccess(grpcPath, body.length);
+                            resultFuture.complete(SendResult.SUCCESS);
+                        } else if (status >= 400 && status < 500) {
+                            AgentLogger.warn("gRPC send rejected (4xx=" + status
+                                    + ") path=" + grpcPath + " — 재시도 없음");
+                            // 4xx: 클라이언트 오류 — CB 카운트 대상 아님
+                            resultFuture.complete(SendResult.FAILURE);
+                        } else {
+                            // 5xx / 기타 — 재시도 예약
+                            AgentLogger.warn("gRPC send failed (status=" + status
+                                    + ") attempt=" + (attempt + 1) + "/" + MAX_ATTEMPTS
+                                    + " path=" + grpcPath);
+                            scheduleNextAttempt(grpcPath, body, attempt + 1, resultFuture);
+                        }
+                    });
+        };
+
+        if (delayMs <= 0) {
+            retryScheduler.execute(sendTask);
+        } else {
+            retryScheduler.schedule(sendTask, delayMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /** 다음 attempt를 retryScheduler에 예약한다 (Thread.sleep 없음). */
+    private void scheduleNextAttempt(String grpcPath, byte[] body,
+                                      int nextAttempt, CompletableFuture<SendResult> resultFuture) {
+        if (nextAttempt >= MAX_ATTEMPTS) {
+            onSendFailure(grpcPath);
+            resultFuture.complete(SendResult.FAILURE);
+            return;
+        }
+        long delayMs = RETRY_BACKOFF_MS[nextAttempt];
+        retryScheduler.schedule(
+                () -> doAttempt(grpcPath, body, nextAttempt, resultFuture),
+                delayMs, TimeUnit.MILLISECONDS);
     }
 
     private void onSendSuccess(String grpcPath, int bytes) {
@@ -233,16 +329,15 @@ public final class GrpcSender {
 
     private void onSendFailure(String grpcPath) {
         AgentLogger.warn("gRPC send exhausted retries path=" + grpcPath);
-        CbState current = cbState.get();
-        if (current == CbState.HALF_OPEN) {
-            // HALF_OPEN 프로브 실패 → 재오픈
-            cbState.set(CbState.OPEN);
+        // HALF_OPEN 프로브 실패 → 재오픈 (CAS 보호)
+        if (cbState.compareAndSet(CbState.HALF_OPEN, CbState.OPEN)) {
             cbOpenedAtMs = System.currentTimeMillis();
             cbFailures.set(0);
             AgentLogger.warn("GrpcSender: circuit re-OPEN (HALF_OPEN 프로브 실패)");
             recordCbMetric(CbState.OPEN);
             return;
         }
+        // CLOSED 상태 실패 카운트 누적 → 임계치 도달 시 OPEN
         int failures = cbFailures.incrementAndGet();
         if (failures >= CB_FAILURE_THRESHOLD && cbState.compareAndSet(CbState.CLOSED, CbState.OPEN)) {
             cbOpenedAtMs = System.currentTimeMillis();
@@ -269,6 +364,16 @@ public final class GrpcSender {
 
     public void shutdown() {
         isShutdown.set(true);
+        retryScheduler.shutdown();
+        try {
+            // 진행 중인 재시도 완료 대기 (최대 5초)
+            if (!retryScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                retryScheduler.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            retryScheduler.shutdownNow();
+        }
         AgentLogger.info("GrpcSender shutdown 완료");
     }
 
@@ -430,14 +535,10 @@ public final class GrpcSender {
         return (val != null && !val.isEmpty()) ? val : defaultVal;
     }
 
-    private static boolean sleepUninterruptibly(long ms) {
-        if (ms <= 0) return true;
-        try {
-            Thread.sleep(ms);
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
+    private static String unwrapCause(Throwable ex) {
+        Throwable cause = ex.getCause();
+        return cause != null
+                ? cause.getClass().getSimpleName() + ": " + cause.getMessage()
+                : ex.getClass().getSimpleName() + ": " + ex.getMessage();
     }
 }
