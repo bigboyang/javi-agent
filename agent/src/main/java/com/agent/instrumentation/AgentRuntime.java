@@ -5,7 +5,7 @@ import com.agent.config.AgentConfig;
 import com.agent.config.RemoteConfigPoller;
 import com.agent.logs.AgentLogger;
 import com.agent.logs.TraceLogger;
-import com.agent.sampler.AdaptiveSampler;
+// import com.agent.sampler.AdaptiveSampler; // [DISABLED] Adaptive sampling → collector로 이전
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
 import com.agent.common.grpc.GrpcSender;
@@ -25,7 +25,7 @@ import com.agent.trace.exporter.LoggingSpanExporter;
 import com.agent.trace.exporter.OtlpGrpcSpanExporter;
 import com.agent.trace.exporter.OtlpHttpSpanExporter;
 import com.agent.trace.exporter.SpanExporter;
-import com.agent.trace.processor.TailSamplingSpanProcessor;
+// import com.agent.trace.processor.TailSamplingSpanProcessor; // [DISABLED] Tail sampling → collector로 이전
 import java.util.Arrays;
 
 /**
@@ -67,27 +67,29 @@ public final class AgentRuntime {
             AgentLogger.info("프로토콜: OTLP/HTTP Protobuf endpoint=" + config.getGrpcEndpoint());
         }
 
+        // [DISABLED] Adaptive/Tail Sampling은 collector에서 처리
         // Fix 1: ParentBased — 항상 ParentBasedSampler로 감싸서 원격 부모의 sampled 결정을 존중
-        Sampler sampler;
-        AdaptiveSampler adaptiveSampler = null;
-        if (config.getTargetSps() > 0) {
-            adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
-            sampler = Sampler.parentBased(adaptiveSampler);
-            AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + "), wrapped in ParentBasedSampler");
-        } else {
-            sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
-        }
+        Sampler sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
+        // AdaptiveSampler adaptiveSampler = null;
+        // if (config.getTargetSps() > 0) {
+        //     adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
+        //     sampler = Sampler.parentBased(adaptiveSampler);
+        //     AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + "), wrapped in ParentBasedSampler");
+        // } else {
+        //     sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
+        // }
 
         PROVIDER = new SdkTracerProvider(IdGenerator.random());
         PROVIDER.setSampler(sampler);
 
-        // Fix 2: True Tail Sampling — traceId 단위로 버퍼링, 루트 스팬 완료 시 트레이스 전체 평가
-        if (config.isTailSamplingEnabled()) {
-            PROVIDER.addSpanProcessor(new TailSamplingSpanProcessor(spanExporter, config));
-            AgentLogger.info("[TailSamplingSpanProcessor] Enabled (TTL=" + config.getTailSamplingTtlMs() + "ms)");
-        } else {
-            PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
-        }
+        // [DISABLED] Tail Sampling → collector에서 처리
+        // if (config.isTailSamplingEnabled()) {
+        //     PROVIDER.addSpanProcessor(new TailSamplingSpanProcessor(spanExporter, config));
+        //     AgentLogger.info("[TailSamplingSpanProcessor] Enabled (TTL=" + config.getTailSamplingTtlMs() + "ms)");
+        // } else {
+        //     PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
+        // }
+        PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
 
         // JaviSdk 초기화 (Trace + Log + Metric 통합 관리)
         JaviSdk.initialize(PROVIDER, loggerProvider, meterProvider);
@@ -99,9 +101,10 @@ public final class AgentRuntime {
 
         // 원격 설정 폴러 시작 (대시보드 pull 방식)
         RemoteConfigPoller poller = RemoteConfigPoller.startIfConfigured(PROVIDER);
-        if (poller != null && adaptiveSampler != null) {
-            poller.setAdaptiveSampler(adaptiveSampler);
-        }
+        // [DISABLED] AdaptiveSampler 연동 → collector로 이전
+        // if (poller != null && adaptiveSampler != null) {
+        //     poller.setAdaptiveSampler(adaptiveSampler);
+        // }
 
         AgentLogger.info("service=" + config.getServiceName()
                 + " sampleRate=" + config.getSampleRate());
