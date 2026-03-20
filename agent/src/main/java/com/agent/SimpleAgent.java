@@ -336,6 +336,13 @@ public class SimpleAgent {
     /**
      * JDBC Statement execute*(String sql) 계측.
      * Statement를 직접 사용하거나 Hibernate Native Query 등에서 호출된다.
+     *
+     * Bug fix: ElementMatcher 연산자 우선순위 — .and()는 바로 앞의 .or() 결과에만 바인딩되므로
+     * 각 메서드명 조건에 개별적으로 .and(takesArgument) 를 적용한다.
+     * 잘못된 형태: named("execute").or(named("executeQuery")).or(named("executeUpdate")).and(takesArgument(0, String.class))
+     *   → executeUpdate().and(takesArgument(0, String.class)) 만 필터링됨
+     * 올바른 형태: (named("A").or(named("B")).or(named("C"))).and(takesArgument(0, String.class))
+     *   → 괄호 위치가 없으므로 아래처럼 각각 and 조합 후 or로 묶어야 한다.
      */
     private static void installJdbcStatementInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
         agentBuilder
@@ -346,10 +353,12 @@ public class SimpleAgent {
                 .transform((builder, type, classLoader, module, protectionDomain) ->
                         builder.visit(
                                 Advice.to(JdbcStatementAdvice.class)
-                                        .on(ElementMatchers.named("execute")
-                                                .or(ElementMatchers.named("executeQuery"))
-                                                .or(ElementMatchers.named("executeUpdate"))
-                                                .and(ElementMatchers.takesArgument(0, String.class)))))
+                                        .on((ElementMatchers.named("execute")
+                                                    .and(ElementMatchers.takesArgument(0, String.class)))
+                                                .or(ElementMatchers.named("executeQuery")
+                                                    .and(ElementMatchers.takesArgument(0, String.class)))
+                                                .or(ElementMatchers.named("executeUpdate")
+                                                    .and(ElementMatchers.takesArgument(0, String.class))))))
                 .installOn(inst);
         AgentLogger.info("JDBC Statement 계측 등록 완료 (execute*(String sql))");
     }
@@ -357,22 +366,37 @@ public class SimpleAgent {
     /**
      * JDBC PreparedStatement execute*() 계측 (SQL 인자 없음).
      * JPA/Hibernate가 생성하는 파라미터화된 쿼리를 캡처한다.
+     *
+     * Bug fix 1: ElementMatcher 연산자 우선순위 — 각 메서드에 개별적으로
+     *   .and(takesNoArguments()) 를 적용한 뒤 or 로 결합한다.
+     *
+     * Bug fix 2: HikariCP + H2 이중 계측 방지 — HikariProxyPreparedStatement.execute()는
+     *   내부에서 delegate(H2 JdbcPreparedStatement).execute()를 호출하므로,
+     *   두 클래스 모두 isSubTypeOf(PreparedStatement)에 매칭되어 span이 두 번 생성된다.
+     *   HikariCP 프록시 클래스를 type matcher에서 명시적으로 제외하여
+     *   실제 드라이버 구현체(H2, MySQL 등)의 execute() 한 곳에서만 span을 생성한다.
      */
     private static void installJdbcPreparedStatementInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
         agentBuilder
                 .type(
                     ElementMatchers.isSubTypeOf(java.sql.PreparedStatement.class)
                         .and(ElementMatchers.not(ElementMatchers.isInterface()))
-                        .and(ElementMatchers.not(ElementMatchers.isAbstract())))
+                        .and(ElementMatchers.not(ElementMatchers.isAbstract()))
+                        // HikariCP 프록시는 제외: HikariProxyPreparedStatement.execute()가
+                        // delegate(실 PS).execute()를 호출하므로 실 PS에서만 계측한다.
+                        .and(ElementMatchers.not(
+                            ElementMatchers.nameStartsWith("com.zaxxer.hikari."))))
                 .transform((builder, type, classLoader, module, protectionDomain) ->
                         builder.visit(
                                 Advice.to(JdbcPreparedStatementAdvice.class)
-                                        .on(ElementMatchers.named("execute")
-                                                .or(ElementMatchers.named("executeQuery"))
-                                                .or(ElementMatchers.named("executeUpdate"))
-                                                .and(ElementMatchers.takesNoArguments()))))
+                                        .on((ElementMatchers.named("execute")
+                                                    .and(ElementMatchers.takesNoArguments()))
+                                                .or(ElementMatchers.named("executeQuery")
+                                                    .and(ElementMatchers.takesNoArguments()))
+                                                .or(ElementMatchers.named("executeUpdate")
+                                                    .and(ElementMatchers.takesNoArguments())))))
                 .installOn(inst);
-        AgentLogger.info("JDBC PreparedStatement 계측 등록 완료 (execute*())");
+        AgentLogger.info("JDBC PreparedStatement 계측 등록 완료 (execute*(), HikariCP 프록시 제외)");
     }
 
     /**
