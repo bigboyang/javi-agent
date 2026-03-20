@@ -5,6 +5,7 @@ import com.agent.instrumentation.ApacheHttpClientAdvice;
 import com.agent.instrumentation.CompletableFutureAdvice;
 import com.agent.instrumentation.CompletableFutureSupplierAdvice;
 import com.agent.instrumentation.ControllerMethodAdvice;
+import com.agent.instrumentation.HttpServletAdvice;
 import com.agent.instrumentation.ExecutorCallableAdvice;
 import com.agent.instrumentation.ExecutorServiceAdvice;
 import com.agent.instrumentation.HttpClientAdvice;
@@ -94,7 +95,8 @@ public class SimpleAgent {
         }
 
         // 기존 및 신규 계측 설치
-        installSpringMvcInstrumentation(inst, agentBuilder);
+        installServletInstrumentation(inst, agentBuilder);      // Layer 1: Servlet (HTTP attr 보장)
+        installSpringMvcInstrumentation(inst, agentBuilder);    // Layer 2: Spring MVC route 보강
         installJdbcStatementInstrumentation(inst, agentBuilder);
         installJdbcPreparedStatementInstrumentation(inst, agentBuilder);
         installHttpClientInstrumentation(inst, agentBuilder);
@@ -276,8 +278,43 @@ public class SimpleAgent {
     }
 
     /**
-     * Spring MVC @RestController / @Controller 계측.
-     * 모든 public 메서드에 SERVER 스팬을 생성한다.
+     * javax.servlet.http.HttpServlet 계측 — Layer 1 (Servlet).
+     *
+     * <p>HttpServlet의 모든 서브클래스(DispatcherServlet 포함)의
+     * {@code service(HttpServletRequest, HttpServletResponse)}를 계측한다.
+     *
+     * <ul>
+     *   <li>SERVER span 생성, http.request.method / http.target / http.scheme / http.host 설정</li>
+     *   <li>W3C traceparent 추출</li>
+     *   <li>ACTIVE_SERVLET_STATE ThreadLocal에 상태 저장 → Layer 2(ControllerMethodAdvice)가 참조</li>
+     * </ul>
+     */
+    private static void installServletInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
+        agentBuilder
+                .type(
+                    ElementMatchers.hasSuperType(
+                        ElementMatchers.named("javax.servlet.http.HttpServlet"))
+                    .and(ElementMatchers.not(ElementMatchers.isInterface()))
+                    .and(ElementMatchers.not(ElementMatchers.isAbstract())))
+                .transform((builder, type, classLoader, module, protectionDomain) ->
+                        builder.visit(
+                                Advice.to(HttpServletAdvice.class)
+                                        .on(ElementMatchers.named("service")
+                                                .and(ElementMatchers.takesArguments(2))
+                                                .and(ElementMatchers.takesArgument(0,
+                                                        ElementMatchers.named("javax.servlet.http.HttpServletRequest")))
+                                                .and(ElementMatchers.takesArgument(1,
+                                                        ElementMatchers.named("javax.servlet.http.HttpServletResponse"))))))
+                .installOn(inst);
+        AgentLogger.info("Servlet 계측 등록 완료 (HttpServlet.service — Layer 1)");
+    }
+
+    /**
+     * Spring MVC @RestController / @Controller 계측 — Layer 2 (route 보강).
+     *
+     * <p>HttpServletAdvice(Layer 1)가 생성한 servlet span에 http.route를 추가하고
+     * span 이름을 route 템플릿으로 갱신한다. RequestContextHolder에 의존하지 않는다.
+     * Layer 1 span이 없는 환경(테스트, 비servlet)에서는 독립 SERVER span을 생성한다.
      */
     private static void installSpringMvcInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
         agentBuilder

@@ -156,6 +156,7 @@ com/agent/instrumentation/KafkaProducerAdvice.class
 com/agent/propagation/BaggagePropagator.class
 com/agent/instrumentation/GrpcClientAdvice$State.class
 com/agent/trace/exporter/OtlpHttpSpanExporter$1.class
+com/agent/instrumentation/JdbcStatementAdvice$ConnInfo.class
 com/agent/logs/LogRecord.class
 com/agent/metric/MetricLogger.class
 com/agent/concurrent/ContextPropagatingRunnable.class

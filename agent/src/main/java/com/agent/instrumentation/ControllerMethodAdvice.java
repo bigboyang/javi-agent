@@ -87,6 +87,44 @@ public final class ControllerMethodAdvice {
             return null;
         }
 
+        // ── Layer 2 enrichment path ───────────────────────────────────────────
+        // HttpServletAdvice(Layer 1)가 이미 SERVER span을 생성한 경우:
+        // - 새 span을 생성하지 않고 기존 span에 http.route만 추가한다.
+        // - RequestContextHolder에 의존하지 않으므로 null 취약점 없음.
+        // - JDBC 등 child span은 servlet span의 자식이 된다 (이미 makeCurrent).
+        HttpServletAdvice.State servletState = HttpServletAdvice.ACTIVE_SERVLET_STATE.get();
+        if (servletState != null) {
+            String route = null;
+            Object req   = servletState.request;
+            if (req != null) {
+                try {
+                    Method mGetAttribute = cachedGetAttribute;
+                    if (mGetAttribute == null) {
+                        synchronized (ControllerMethodAdvice.class) {
+                            mGetAttribute = cachedGetAttribute;
+                            if (mGetAttribute == null) {
+                                mGetAttribute = req.getClass().getMethod("getAttribute", String.class);
+                                cachedGetAttribute = mGetAttribute;
+                            }
+                        }
+                    }
+                    Object pattern = mGetAttribute.invoke(req, BEST_MATCHING_PATTERN_ATTR);
+                    if (pattern != null) route = pattern.toString();
+                } catch (Throwable ignored) {}
+            }
+            if (route != null) {
+                String newSpanName = (servletState.httpMethod != null ? servletState.httpMethod : "HTTP")
+                        + " " + route;
+                servletState.span.updateName(newSpanName);
+                servletState.span.setAttribute("http.route", route);
+            }
+            AgentLogger.debug("[MVC] servlet span enriched: route=" + route);
+            // owned=false: scope/span 종료는 HttpServletAdvice가 담당
+            return new State(servletState.span, null, null, null,
+                    route, servletState.httpMethod, servletState.startNano, false);
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         String spanName;
         String httpMethod = null;
         String uri        = null;   // raw URI (http.target)
@@ -338,12 +376,26 @@ public final class ControllerMethodAdvice {
         AgentLogger.debug("[HTTP] span started: " + spanName
                 + (remoteParent != null ? " (propagated traceId=" + remoteParent.getTraceId() + ")" : ""));
         return new State(span, scope, prevTraceId, prevSpanId,
-                route != null ? route : uri, httpMethod, System.nanoTime());
+                route != null ? route : uri, httpMethod, System.nanoTime(), true);
     }
 
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     public static void onExit(@Advice.Enter State state, @Advice.Thrown Throwable error) {
         if (state == null) return;
+
+        // ── Layer 2 (servlet span enrichment) 경로 ──────────────────────────
+        // owned=false: span 소유권이 HttpServletAdvice에 있으므로
+        //   scope/span 종료, status_code 설정, MDC 복원은 HttpServletAdvice.onExit가 담당.
+        //   여기서는 metrics 기록만 수행한다.
+        if (!state.owned) {
+            if (error != null) {
+                state.span.recordException(error);
+                state.span.setStatus(SpanStatus.ERROR, error.getMessage());
+            }
+            recordHttpMetrics(state, error);
+            return;
+        }
+        // ────────────────────────────────────────────────────────────────────
 
         // http.response.status_code: HttpServletResponse.getStatus()로 추출
         // Reuses cachedRchClass / cachedGetRequestAttributes populated by onEnter.
@@ -461,16 +513,21 @@ public final class ControllerMethodAdvice {
     }
 
     public static final class State {
-        public final Span   span;
-        public final Scope  scope;
-        public final String prevTraceId;
-        public final String prevSpanId;
-        public final String route;
-        public final String httpMethod;
-        public final long   startNano;
+        public final Span    span;
+        public final Scope   scope;
+        public final String  prevTraceId;
+        public final String  prevSpanId;
+        public final String  route;
+        public final String  httpMethod;
+        public final long    startNano;
+        /**
+         * true  — 이 State가 span을 소유 (onExit에서 scope.close() + span.end() + MDC 복원)
+         * false — HttpServletAdvice(Layer 1)가 span을 소유 (metrics 기록만 수행)
+         */
+        public final boolean owned;
 
         public State(Span span, Scope scope, String prevTraceId, String prevSpanId,
-                     String route, String httpMethod, long startNano) {
+                     String route, String httpMethod, long startNano, boolean owned) {
             this.span        = span;
             this.scope       = scope;
             this.prevTraceId = prevTraceId;
@@ -478,6 +535,7 @@ public final class ControllerMethodAdvice {
             this.route       = route;
             this.httpMethod  = httpMethod;
             this.startNano   = startNano;
+            this.owned       = owned;
         }
     }
 
