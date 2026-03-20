@@ -27,10 +27,14 @@ public class Log4j2Advice {
                 LogEvent logEvent = (LogEvent) event;
 
                 // 로그 메시지 수집
+                // Bug #9: getFormattedMessage()가 null을 반환할 수 있으므로 null-safe 처리
+                String message = logEvent.getMessage().getFormattedMessage();
+                if (message == null) message = logEvent.getMessage().getFormat();
+                if (message == null) message = "";
                 SdkLogEmitter.emit(
                         logEvent.getLoggerName(),
                         logEvent.getLevel().toString(),
-                        logEvent.getMessage().getFormattedMessage(),
+                        message,
                         Collections.emptyMap()
                 );
 

@@ -112,8 +112,39 @@ public final class AppLogCollector {
             PUBLISHING.set(true);
             try {
                 fileHandler.publish(record);
+                // Bug #9: JUL 로그를 OTLP 파이프라인에도 전달 — ClickHouse에서 JUL 로그 수집
+                String body = formatJulBody(record);
+                SdkLogEmitter.emit(loggerName, julLevelToSeverity(record.getLevel()), body,
+                        java.util.Collections.emptyMap());
             } finally {
                 PUBLISHING.set(false);
+            }
+        }
+
+        /** JUL Level → OTel severity 문자열 변환. */
+        private static String julLevelToSeverity(Level level) {
+            if (level == null) return "INFO";
+            int v = level.intValue();
+            if (v >= Level.SEVERE.intValue())  return "ERROR";
+            if (v >= Level.WARNING.intValue()) return "WARN";
+            if (v >= Level.INFO.intValue())    return "INFO";
+            if (v >= Level.FINE.intValue())    return "DEBUG";
+            return "TRACE";
+        }
+
+        /**
+         * JUL LogRecord 메시지를 파라미터 치환하여 반환한다.
+         * {0}, {1} 플레이스홀더가 있는 경우 MessageFormat으로 포맷한다.
+         */
+        private static String formatJulBody(LogRecord record) {
+            String raw = record.getMessage();
+            if (raw == null) return "";
+            Object[] params = record.getParameters();
+            if (params == null || params.length == 0) return raw;
+            try {
+                return java.text.MessageFormat.format(raw, params);
+            } catch (Exception e) {
+                return raw;
             }
         }
 

@@ -28,10 +28,15 @@ public class LogbackAdvice {
                         (ch.qos.logback.classic.spi.ILoggingEvent) event;
 
                 // 로그 메시지 수집
+                // Bug #9: getFormattedMessage()가 null을 반환할 수 있으므로 null-safe 처리
+                // (logger.info(null) 등 null 메시지 로그 호출 시 발생 → ClickHouse body="")
+                String message = loggingEvent.getFormattedMessage();
+                if (message == null) message = loggingEvent.getMessage();
+                if (message == null) message = "";
                 SdkLogEmitter.emit(
                         loggingEvent.getLoggerName(),
                         loggingEvent.getLevel().toString(),
-                        loggingEvent.getFormattedMessage(),
+                        message,
                         Collections.emptyMap()
                 );
 
