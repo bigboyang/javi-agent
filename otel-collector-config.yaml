@@ -3,29 +3,65 @@ receivers:
     protocols:
       grpc:
         endpoint: 0.0.0.0:4317
+        # gRPC keepalive: 장기 연결 안정화
+        keepalive:
+          server_parameters:
+            max_connection_age: 300s
+            max_connection_age_grace: 5s
       http:
         endpoint: 0.0.0.0:4318
 
 processors:
+  # memory_limiter: 항상 파이프라인의 첫 번째 프로세서
+  # limit_mib 초과 시 503 반환 → Agent의 재시도 유발
+  # 기존 256MiB는 JVM/Tomcat/Hikari 메트릭 burst 시 너무 빠르게 트리거됨
+  memory_limiter:
+    limit_mib: 512          # 256 → 512: burst 허용 범위 확대
+    spike_limit_mib: 128    # 64 → 128: 스파이크 허용 범위 확대
+    check_interval: 1s      # 5s → 1s: 더 빠른 메모리 모니터링으로 OOM 방지
+
   batch:
     timeout: 5s
     send_batch_size: 1000
-  memory_limiter:
-    limit_mib: 256
-    spike_limit_mib: 64
-    check_interval: 5s
+    # send_batch_max_size: batch가 이 크기를 초과하면 강제 플러시
+    # 설정하지 않으면 큐가 무제한으로 증가 가능
+    send_batch_max_size: 2000
 
 exporters:
   otlp/jaeger:
     endpoint: jaeger:14250
     tls:
       insecure: true
+    # retry: Jaeger 일시 장애 시 데이터 손실 방지
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+      max_elapsed_time: 120s
+    # queue: 백프레셔 발생 시 메모리 내 버퍼링
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 1000
+
   prometheus:
     endpoint: "0.0.0.0:8889"
+    # Prometheus는 pull 방식이므로 retry 불필요
+    # 단, 메트릭 만료 설정으로 stale 데이터 정리
+    metric_expiration: 3m
+
   logging:
     loglevel: warn
 
 service:
+  # Collector 자체 텔레메트리 (내부 메트릭 노출)
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: basic
+      address: 0.0.0.0:8888
+
   pipelines:
     traces:
       receivers: [otlp]

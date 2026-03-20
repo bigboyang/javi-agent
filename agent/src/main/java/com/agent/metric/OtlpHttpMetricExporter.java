@@ -113,21 +113,33 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
                 totalPoints += m.getPoints().size();
             }
         }
+        final int capturedPoints = totalPoints;
 
         String json = toJson(metrics, serviceName);
-        SendResult result = sender.send(endpoint, json);
+        final int batchSize = metrics.size();
 
-        if (result == SendResult.SUCCESS) {
-            exportedPoints.addAndGet(totalPoints);
-        } else {
-            droppedPoints.addAndGet(totalPoints);
-            failedBatches.incrementAndGet();
-            AgentLogger.warn("OtlpHttpMetricExporter: 배치 전송 실패 metrics=" + metrics.size()
-                    + " points=" + totalPoints
-                    + " dropped_total=" + droppedPoints.get());
-        }
-
-        return CompletableFuture.completedFuture(null);
+        // sendAsync()를 사용해 Worker 스레드를 블로킹하지 않는다.
+        // 재시도 backoff 중에도 Worker는 계속 다음 배치를 처리할 수 있다.
+        return sender.sendAsync(endpoint, json)
+                .thenApply(result -> {
+                    if (result == SendResult.SUCCESS) {
+                        exportedPoints.addAndGet(capturedPoints);
+                    } else {
+                        droppedPoints.addAndGet(capturedPoints);
+                        failedBatches.incrementAndGet();
+                        AgentLogger.warn("OtlpHttpMetricExporter: 배치 전송 실패 metrics=" + batchSize
+                                + " points=" + capturedPoints
+                                + " result=" + result
+                                + " dropped_total=" + droppedPoints.get());
+                    }
+                    return (Void) null;
+                })
+                .exceptionally(ex -> {
+                    droppedPoints.addAndGet(capturedPoints);
+                    failedBatches.incrementAndGet();
+                    AgentLogger.error("OtlpHttpMetricExporter: export 예외: " + ex.getMessage());
+                    return null;
+                });
     }
 
     @Override
