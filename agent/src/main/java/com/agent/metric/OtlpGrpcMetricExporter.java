@@ -293,13 +293,12 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
                        + hp.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
         }
-        // count (uint64 varint)
-        ProtoEncoder.writeTag(out, FN_HDP_COUNT, ProtoEncoder.WIRE_VARINT);
-        ProtoEncoder.writeRawVarint64(out, hp.getCount());
+        // count (fixed64 — OTel proto: fixed64, not uint64)
+        ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, hp.getCount());
         // sum (optional double)
         ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, hp.getSum());
-        // bucket_counts: packed repeated uint64
-        ProtoEncoder.writePackedUint64(out, FN_HDP_BUCKET_COUNTS, hp.getBucketCounts());
+        // bucket_counts: packed repeated fixed64 (OTel proto: fixed64, not uint64)
+        ProtoEncoder.writePackedFixed64(out, FN_HDP_BUCKET_COUNTS, hp.getBucketCounts());
         // explicit_bounds: packed repeated double
         ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
         // exemplars: repeated Exemplar (field 8) — Metric-Trace 연결
@@ -370,8 +369,8 @@ public final class OtlpGrpcMetricExporter implements DataExporter<MetricData> {
                        + point.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
         }
-        ProtoEncoder.writeTag(out, FN_HDP_COUNT, ProtoEncoder.WIRE_VARINT);
-        ProtoEncoder.writeRawVarint64(out, 1L);
+        // count (fixed64 — OTel proto: fixed64)
+        ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, 1L);
         ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
         return out.toByteArray();
     }

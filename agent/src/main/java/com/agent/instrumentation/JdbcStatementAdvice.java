@@ -30,11 +30,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class JdbcStatementAdvice {
 
     // ── Reflection 메서드 캐시 (클래스별) ────────────────────────────────────
-    static final ConcurrentHashMap<Class<?>, Method> GET_CONNECTION_CACHE = new ConcurrentHashMap<>(4);
-    private static final ConcurrentHashMap<Class<?>, Method> GET_META_CACHE        = new ConcurrentHashMap<>(4);
-    private static final ConcurrentHashMap<Class<?>, Method> GET_PRODUCT_NAME_CACHE = new ConcurrentHashMap<>(4);
-    private static final ConcurrentHashMap<Class<?>, Method> GET_URL_CACHE         = new ConcurrentHashMap<>(4);
-    private static final ConcurrentHashMap<Class<?>, Method> GET_USERNAME_CACHE    = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, Method> GET_CONNECTION_CACHE = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, Method> GET_META_CACHE        = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, Method> GET_PRODUCT_NAME_CACHE = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, Method> GET_URL_CACHE         = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, Method> GET_USERNAME_CACHE    = new ConcurrentHashMap<>(4);
 
     /**
      * DB 연결 메타데이터 캐시 (커넥션 클래스 → ConnInfo).
@@ -43,11 +43,11 @@ public final class JdbcStatementAdvice {
      * 클래스가 동일하면 vendor/URL/user도 동일하다 (단일 DataSource 기준).
      * Datadog Agent, OTel Java SDK 모두 동일한 per-class 캐싱 전략을 사용한다.
      */
-    static final ConcurrentHashMap<Class<?>, ConnInfo> CONN_INFO_CACHE = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<Class<?>, ConnInfo> CONN_INFO_CACHE = new ConcurrentHashMap<>(4);
 
     /** 불변 DB 연결 메타데이터 홀더 */
-    static final class ConnInfo {
-        static final ConnInfo UNKNOWN = new ConnInfo("other_sql", null, null, null, null);
+    public static final class ConnInfo {
+        public static final ConnInfo UNKNOWN = new ConnInfo("other_sql", null, null, null, null);
         final String dbSystem;
         final String dbName;
         final String peerName;
@@ -65,9 +65,9 @@ public final class JdbcStatementAdvice {
 
     // ── 메트릭 직접 레퍼런스 캐시 ("dbSystem|dbOperation" → Counter/Histogram) ─
     // 매 쿼리마다 HashMap + MetricKey + TreeMap 생성을 제거한다.
-    private static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_COUNT_CACHE     = new ConcurrentHashMap<>(16);
-    private static final ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram> DB_DUR_CACHE       = new ConcurrentHashMap<>(16);
-    private static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_ERR_COUNT_CACHE = new ConcurrentHashMap<>(16);
+    public static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_COUNT_CACHE     = new ConcurrentHashMap<>(16);
+    public static final ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram> DB_DUR_CACHE       = new ConcurrentHashMap<>(16);
+    public static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_ERR_COUNT_CACHE = new ConcurrentHashMap<>(16);
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -126,7 +126,7 @@ public final class JdbcStatementAdvice {
      * DB 메트릭 기록 — Counter/Histogram 레퍼런스를 직접 캐싱하여 hot path 오버헤드 제거.
      * JdbcPreparedStatementAdvice에서도 호출한다.
      */
-    static void recordDbMetrics(String dbSystem, String dbOperation, long startNano, Throwable error) {
+    public static void recordDbMetrics(String dbSystem, String dbOperation, long startNano, Throwable error) {
         try {
             long durationMs = (System.nanoTime() - startNano) / 1_000_000L;
             final String cacheKey = dbSystem + "|" + dbOperation;
@@ -166,7 +166,7 @@ public final class JdbcStatementAdvice {
      *
      * @return dbSystem 문자열 (예: "mysql", "postgresql")
      */
-    static String extractConnMetadata(Object conn, Span span) {
+    public static String extractConnMetadata(Object conn, Span span) {
         Class<?> connClass = conn.getClass();
         ConnInfo cached = CONN_INFO_CACHE.get(connClass);
         if (cached != null) {
@@ -179,7 +179,7 @@ public final class JdbcStatementAdvice {
         return info.dbSystem;
     }
 
-    private static void applyConnInfo(ConnInfo info, Span span) {
+    public static void applyConnInfo(ConnInfo info, Span span) {
         if (info.dbName   != null) span.setAttribute("db.name",       info.dbName);
         if (info.peerName != null) span.setAttribute("net.peer.name", info.peerName);
         if (info.peerPort != null) span.setAttribute("net.peer.port", info.peerPort);
@@ -187,7 +187,7 @@ public final class JdbcStatementAdvice {
     }
 
     /** 최초 1회 reflection으로 ConnInfo를 구성한다. */
-    private static ConnInfo resolveConnInfo(Object conn, Class<?> connClass) {
+    public static ConnInfo resolveConnInfo(Object conn, Class<?> connClass) {
         try {
             Method mGetMeta = GET_META_CACHE.get(connClass);
             if (mGetMeta == null) {
@@ -303,7 +303,7 @@ public final class JdbcStatementAdvice {
     }
 
     /** SQL 첫 단어에서 db.operation 추출 (카디널리티 낮음: SELECT/INSERT/UPDATE/DELETE 등) */
-    static String extractDbOperation(String sql) {
+    public static String extractDbOperation(String sql) {
         if (sql == null || sql.isEmpty()) return "UNKNOWN";
         String trimmed = sql.trim();
         int space = trimmed.indexOf(' ');

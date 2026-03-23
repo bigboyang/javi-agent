@@ -49,32 +49,28 @@ public final class ControllerMethodAdvice {
             HTTP_ERR_COUNT_CACHE = new java.util.concurrent.ConcurrentHashMap<>(32);
 
     // ── Cached Class ──────────────────────────────────────────────────────────
-    // Resolved once on first request; Class.forName acquires a classloader lock
-    // so caching here eliminates that cost on every subsequent call.
-    private static volatile Class<?> cachedRchClass;        // RequestContextHolder
+    // public: ByteBuddy inlines advice into TestController (loaded by LaunchedClassLoader).
+    // private fields throw IllegalAccessError from cross-classloader inlined bytecode.
+    public static volatile Class<?> cachedRchClass;        // RequestContextHolder
 
     // ── Cached Methods on RequestContextHolder ────────────────────────────────
-    private static volatile Method cachedGetRequestAttributes; // RCH.getRequestAttributes()
+    public static volatile Method cachedGetRequestAttributes; // RCH.getRequestAttributes()
 
     // ── Cached Methods on ServletRequestAttributes (attrs object) ────────────
-    // The concrete type of attrs is ServletRequestAttributes; we look up through
-    // that class on first use and cache the result.
-    private static volatile Method cachedGetRequest;           // attrs.getRequest()
-    private static volatile Method cachedGetResponse;          // attrs.getResponse()
+    public static volatile Method cachedGetRequest;           // attrs.getRequest()
+    public static volatile Method cachedGetResponse;          // attrs.getResponse()
 
     // ── Cached Methods on HttpServletRequest (req object) ────────────────────
-    // getMethod() on a concrete class searches the full method table; caching
-    // eliminates the search on every subsequent request.
-    private static volatile Method cachedReqGetMethod;         // req.getMethod()
-    private static volatile Method cachedGetRequestURI;        // req.getRequestURI()
-    private static volatile Method cachedGetAttribute;         // req.getAttribute(String)
-    private static volatile Method cachedGetScheme;            // req.getScheme()
-    private static volatile Method cachedGetHeader;            // req.getHeader(String)
-    private static volatile Method cachedGetServerName;        // req.getServerName()
-    private static volatile Method cachedGetServerPort;        // req.getServerPort()
+    public static volatile Method cachedReqGetMethod;         // req.getMethod()
+    public static volatile Method cachedGetRequestURI;        // req.getRequestURI()
+    public static volatile Method cachedGetAttribute;         // req.getAttribute(String)
+    public static volatile Method cachedGetScheme;            // req.getScheme()
+    public static volatile Method cachedGetHeader;            // req.getHeader(String)
+    public static volatile Method cachedGetServerName;        // req.getServerName()
+    public static volatile Method cachedGetServerPort;        // req.getServerPort()
 
     // ── Cached Methods on HttpServletResponse (response object) ──────────────
-    private static volatile Method cachedGetStatus;            // response.getStatus()
+    public static volatile Method cachedGetStatus;            // response.getStatus()
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(

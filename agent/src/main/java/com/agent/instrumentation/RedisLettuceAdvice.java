@@ -22,12 +22,12 @@ import net.bytebuddy.asm.Advice;
 public final class RedisLettuceAdvice {
 
     // ChannelHandlerContext 필드 캐싱 (DCL 패턴)
-    private static volatile java.lang.reflect.Field  CTX_FIELD          = null;
+    public static volatile java.lang.reflect.Field  CTX_FIELD          = null;
     // channel() / remoteAddress() 메서드 캐싱 — 매 Redis 호출마다 getMethod() 조회 제거
-    private static volatile java.lang.reflect.Method CHANNEL_METHOD      = null;
-    private static volatile java.lang.reflect.Method REMOTE_ADDR_METHOD  = null;
+    public static volatile java.lang.reflect.Method CHANNEL_METHOD      = null;
+    public static volatile java.lang.reflect.Method REMOTE_ADDR_METHOD  = null;
     // getType() 메서드 캐싱 — command 타입은 Lettuce 내부 고정 클래스이므로 1회 캐싱으로 충분
-    private static volatile java.lang.reflect.Method GET_TYPE_METHOD     = null;
+    public static volatile java.lang.reflect.Method GET_TYPE_METHOD     = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -81,7 +81,7 @@ public final class RedisLettuceAdvice {
      * → AbstractChannelHandlerContext에 ChannelHandlerContext ctx 필드 존재.
      * Lettuce 5.x/6.x 공통 패턴이나 내부 API이므로 실패해도 span은 계속 진행한다.
      */
-    private static void extractPeerInfo(Object handler, Span span) {
+    public static void extractPeerInfo(Object handler, Span span) {
         try {
             java.lang.reflect.Field ctxField = CTX_FIELD;
             if (ctxField == null) {

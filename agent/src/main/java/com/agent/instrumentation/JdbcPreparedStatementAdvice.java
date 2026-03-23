@@ -35,8 +35,8 @@ public final class JdbcPreparedStatementAdvice {
      * <p>값이 ABSENT_SENTINEL 이면 해당 클래스에 sql 필드가 없다는 뜻이므로
      * getDeclaredFields() 재스캔을 방지한다.
      */
-    private static final ConcurrentHashMap<Class<?>, Field> SQL_FIELD_CACHE = new ConcurrentHashMap<>(4);
-    private static final Field ABSENT_SENTINEL;
+    public static final ConcurrentHashMap<Class<?>, Field> SQL_FIELD_CACHE = new ConcurrentHashMap<>(4);
+    public static final Field ABSENT_SENTINEL;
     static {
         try {
             ABSENT_SENTINEL = JdbcPreparedStatementAdvice.class.getDeclaredField("ABSENT_SENTINEL");
@@ -102,7 +102,7 @@ public final class JdbcPreparedStatementAdvice {
      * <p>클래스별로 Field를 캐싱하여 getDeclaredFields() 전체 스캔을
      * 최초 1회로 제한한다.
      */
-    private static String extractSql(Object preparedStatement) {
+    public static String extractSql(Object preparedStatement) {
         if (preparedStatement == null) return "PreparedStatement";
 
         Class<?> psClass = preparedStatement.getClass();

@@ -15,6 +15,7 @@ com/agent/logs/MetricLogger$MetricFormatter.class
 com/agent/instrumentation/ScheduledTaskAdvice.class
 com/agent/instrumentation/HttpClientAdvice.class
 com/agent/span/SpanKind.class
+com/agent/instrumentation/HttpServletAdvice.class
 com/agent/span/SpanBuilder.class
 com/agent/sampler/ParentBasedSampler.class
 com/agent/instrumentation/SpringAsyncAdvice$State.class
@@ -26,6 +27,7 @@ com/agent/config/RemoteConfig$Builder.class
 com/agent/logs/AgentLogger$AgentFormatter.class
 com/agent/metric/MetricBatchProcessor.class
 com/agent/span/SpanId.class
+com/agent/instrumentation/HttpServletAdvice$State.class
 com/agent/common/utils/core/TemporaryBuffers.class
 com/agent/trace/processor/NoopSpanProcessor.class
 com/agent/instrumentation/KafkaProducerAdvice$State.class
@@ -192,7 +194,6 @@ com/agent/instrumentation/JavaHttpClientAdvice$State.class
 com/agent/trace/exporter/LoggingSpanExporter.class
 com/agent/instrumentation/SpringAsyncAdvice.class
 com/agent/trace/processor/BatchSpanProcessor.class
-com/agent/common/OtlpHttpSender$1.class
 com/agent/trace/exporter/NoopSpanExporter.class
 com/agent/sampler/Sampler.class
 com/agent/instrumentation/MongoDbAdvice.class

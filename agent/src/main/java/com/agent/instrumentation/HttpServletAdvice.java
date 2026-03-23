@@ -50,13 +50,15 @@ public final class HttpServletAdvice {
     public static final ThreadLocal<State> ACTIVE_SERVLET_STATE = new ThreadLocal<>();
 
     // ── Reflection caches ──────────────────────────────────────────────────────
-    private static volatile Method cachedReqGetMethod;    // req.getMethod()
-    private static volatile Method cachedGetRequestURI;   // req.getRequestURI()
-    private static volatile Method cachedGetScheme;       // req.getScheme()
-    private static volatile Method cachedGetHeader;       // req.getHeader(String)
-    private static volatile Method cachedGetServerName;   // req.getServerName()
-    private static volatile Method cachedGetServerPort;   // req.getServerPort()
-    private static volatile Method cachedGetStatus;       // resp.getStatus()
+    // public: ByteBuddy inlines advice into FrameworkServlet (loaded by LaunchedClassLoader).
+    // private fields throw IllegalAccessError from cross-classloader inlined bytecode.
+    public static volatile Method cachedReqGetMethod;    // req.getMethod()
+    public static volatile Method cachedGetRequestURI;   // req.getRequestURI()
+    public static volatile Method cachedGetScheme;       // req.getScheme()
+    public static volatile Method cachedGetHeader;       // req.getHeader(String)
+    public static volatile Method cachedGetServerName;   // req.getServerName()
+    public static volatile Method cachedGetServerPort;   // req.getServerPort()
+    public static volatile Method cachedGetStatus;       // resp.getStatus()
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(

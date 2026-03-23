@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>time_unix_nano = 1 (fixed64)</li>
  *   <li>severity_number = 2 (varint SeverityNumber enum)</li>
  *   <li>severity_text = 3 (string)</li>
- *   <li>body = 15 (AnyValue LEN)</li>
+ *   <li>body = 5 (AnyValue LEN)</li>
  *   <li>attributes = 6 (repeated KeyValue)</li>
  *   <li>trace_id = 9 (bytes/16)</li>
  *   <li>span_id = 10 (bytes/8)</li>
@@ -44,7 +44,7 @@ public final class OtlpGrpcLogExporter implements DataExporter<LogRecord> {
     private static final int FN_LOG_TIME_NS       = 1;  // fixed64
     private static final int FN_LOG_SEVERITY_NUM  = 2;  // varint
     private static final int FN_LOG_SEVERITY_TEXT = 3;  // string
-    private static final int FN_LOG_BODY          = 15; // AnyValue
+    private static final int FN_LOG_BODY          = 5;  // AnyValue (body = 5, NOT 15)
     private static final int FN_LOG_ATTRS         = 6;  // repeated KeyValue
     private static final int FN_LOG_TRACE_ID      = 9;  // bytes
     private static final int FN_LOG_SPAN_ID       = 10; // bytes

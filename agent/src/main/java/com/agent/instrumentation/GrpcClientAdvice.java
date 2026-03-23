@@ -42,9 +42,9 @@ import java.lang.reflect.Method;
 public final class GrpcClientAdvice {
 
     // MethodDescriptor.getFullMethodName() 메서드 — 클래스 로드 이후 캐싱
-    private static volatile Method GET_FULL_METHOD_NAME = null;
+    public static volatile Method GET_FULL_METHOD_NAME = null;
     // ClientCallImpl.method 필드 — 첫 호출 시 캐싱
-    private static volatile java.lang.reflect.Field METHOD_DESCRIPTOR_FIELD = null;
+    public static volatile java.lang.reflect.Field METHOD_DESCRIPTOR_FIELD = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -130,7 +130,7 @@ public final class GrpcClientAdvice {
      *
      * MethodDescriptor.getFullMethodName() -> "package.Service/Method"
      */
-    private static String extractFullMethodName(Object clientCall) {
+    public static String extractFullMethodName(Object clientCall) {
         try {
             // 첫 호출 시 field 탐색 및 캐싱
             java.lang.reflect.Field field = METHOD_DESCRIPTOR_FIELD;
@@ -175,10 +175,10 @@ public final class GrpcClientAdvice {
      * 매 호출마다 Key를 생성하지 않기 위해 static 필드에 캐싱을 시도하나,
      * Metadata.Key는 제네릭 타입 정보를 런타임에 보유하므로 reflection으로 안전하게 생성한다.
      */
-    private static volatile Object TRACEPARENT_KEY = null;
-    private static volatile Method METADATA_PUT_METHOD = null;
+    public static volatile Object TRACEPARENT_KEY = null;
+    public static volatile Method METADATA_PUT_METHOD = null;
 
-    private static void injectTraceparent(Object metadata, Span span) {
+    public static void injectTraceparent(Object metadata, Span span) {
         if (metadata == null) return;
         SpanContext ctx = span.getContext();
         if (ctx == null || !ctx.isValid()) return;

@@ -47,10 +47,10 @@ import java.lang.reflect.Method;
 public final class MongoDbAdvice {
 
     // CommandMessage에서 BsonDocument를 꺼내는 reflection 캐시
-    private static volatile Method GET_COMMAND_DOCUMENT = null;
-    private static volatile Method GET_FIRST_KEY = null;
-    private static volatile Method BSON_GET_STRING = null;
-    private static volatile Method BSON_STRING_GET_VALUE = null;
+    public static volatile Method GET_COMMAND_DOCUMENT = null;
+    public static volatile Method GET_FIRST_KEY = null;
+    public static volatile Method BSON_GET_STRING = null;
+    public static volatile Method BSON_STRING_GET_VALUE = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -137,7 +137,7 @@ public final class MongoDbAdvice {
 
     // --- reflection 헬퍼 ---
 
-    private static Object extractCommandDocument(Object commandMessage) {
+    public static Object extractCommandDocument(Object commandMessage) {
         try {
             Method m = GET_COMMAND_DOCUMENT;
             if (m == null) {
@@ -150,7 +150,7 @@ public final class MongoDbAdvice {
         }
     }
 
-    private static String extractFirstKey(Object bsonDoc) {
+    public static String extractFirstKey(Object bsonDoc) {
         try {
             Method m = GET_FIRST_KEY;
             if (m == null) {
@@ -167,7 +167,7 @@ public final class MongoDbAdvice {
      * BsonDocument.getString(key).getValue() 로 컬렉션 이름을 추출한다.
      * BsonDocument.getString()은 BsonString을 반환한다.
      */
-    private static String extractStringValue(Object bsonDoc, String key) {
+    public static String extractStringValue(Object bsonDoc, String key) {
         try {
             Method getStr = BSON_GET_STRING;
             if (getStr == null) {

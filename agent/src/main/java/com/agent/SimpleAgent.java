@@ -290,6 +290,7 @@ public class SimpleAgent {
      * </ul>
      */
     private static void installServletInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
+        // javax.servlet (Spring Boot 2.x, Tomcat 9 이하)
         agentBuilder
                 .type(
                     ElementMatchers.hasSuperType(
@@ -306,7 +307,43 @@ public class SimpleAgent {
                                                 .and(ElementMatchers.takesArgument(1,
                                                         ElementMatchers.named("javax.servlet.http.HttpServletResponse"))))))
                 .installOn(inst);
-        AgentLogger.info("Servlet 계측 등록 완료 (HttpServlet.service — Layer 1)");
+
+        // jakarta.servlet — Spring MVC: FrameworkServlet이 service(HttpServletRequest, HttpServletResponse)를 직접 정의
+        // DispatcherServlet 같은 concrete subclass를 매칭하면 ByteBuddy가 abstract 메서드 override를 생성하여
+        // RequestContextHolder를 깨뜨리는 문제가 있으므로, 메서드가 실제로 선언된 FrameworkServlet을 직접 매칭한다.
+        agentBuilder
+                .type(ElementMatchers.named("org.springframework.web.servlet.FrameworkServlet"))
+                .transform((builder, type, classLoader, module, protectionDomain) ->
+                        builder.visit(
+                                Advice.to(HttpServletAdvice.class)
+                                        .on(ElementMatchers.named("service")
+                                                .and(ElementMatchers.takesArguments(2))
+                                                .and(ElementMatchers.takesArgument(0,
+                                                        ElementMatchers.named("jakarta.servlet.http.HttpServletRequest")))
+                                                .and(ElementMatchers.takesArgument(1,
+                                                        ElementMatchers.named("jakarta.servlet.http.HttpServletResponse"))))))
+                .installOn(inst);
+
+        // jakarta.servlet — non-Spring concrete servlets (e.g. H2 web console)
+        agentBuilder
+                .type(
+                    ElementMatchers.hasSuperType(
+                        ElementMatchers.named("jakarta.servlet.http.HttpServlet"))
+                    .and(ElementMatchers.not(ElementMatchers.isInterface()))
+                    .and(ElementMatchers.not(ElementMatchers.isAbstract()))
+                    .and(ElementMatchers.not(ElementMatchers.nameStartsWith("org.springframework."))))
+                .transform((builder, type, classLoader, module, protectionDomain) ->
+                        builder.visit(
+                                Advice.to(HttpServletAdvice.class)
+                                        .on(ElementMatchers.named("service")
+                                                .and(ElementMatchers.takesArguments(2))
+                                                .and(ElementMatchers.takesArgument(0,
+                                                        ElementMatchers.named("jakarta.servlet.http.HttpServletRequest")))
+                                                .and(ElementMatchers.takesArgument(1,
+                                                        ElementMatchers.named("jakarta.servlet.http.HttpServletResponse"))))))
+                .installOn(inst);
+
+        AgentLogger.info("Servlet 계측 등록 완료 (HttpServlet.service — Layer 1, javax + jakarta)");
     }
 
     /**
