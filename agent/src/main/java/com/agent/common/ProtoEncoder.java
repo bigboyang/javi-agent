@@ -1,4 +1,4 @@
-package com.agent.common.grpc;
+package com.agent.common;
 
 import java.io.ByteArrayOutputStream;
 
@@ -11,13 +11,6 @@ import java.io.ByteArrayOutputStream;
  *   <li>1 = 64-bit  (fixed64, sfixed64, double)</li>
  *   <li>2 = LEN     (string, bytes, embedded message, packed repeated)</li>
  *   <li>5 = 32-bit  (fixed32, sfixed32, float)</li>
- * </ul>
- *
- * <p>메모리 안전:
- * <ul>
- *   <li>모든 메서드는 ByteArrayOutputStream을 인자로 받아 상태를 갖지 않는다 (static).</li>
- *   <li>호출자가 스택에 BAOS를 할당하므로 힙 누수 없음.</li>
- *   <li>재귀적 중첩 메시지는 두-단계(inner-first) 인코딩으로 처리한다.</li>
  * </ul>
  */
 public final class ProtoEncoder {
@@ -128,10 +121,6 @@ public final class ProtoEncoder {
 
     // ---- Packed repeated 필드 (히스토그램 버킷) ----
 
-    /**
-     * Packed repeated uint64 필드 (varint 인코딩).
-     * Wire type = LEN, 각 값을 varint64로 직렬화한다.
-     */
     public static void writePackedUint64(ByteArrayOutputStream out, int fieldNumber, long[] values) {
         if (values == null || values.length == 0) return;
         ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 4);
@@ -140,11 +129,6 @@ public final class ProtoEncoder {
         writeLengthDelimited(out, packed.toByteArray());
     }
 
-    /**
-     * Packed repeated fixed64 필드 (OTLP HistogramDataPoint.bucket_counts).
-     * Wire type = LEN, 각 값을 8바이트 little-endian fixed64로 직렬화한다.
-     * proto 정의: bucket_counts = fixed64 (not uint64) → 반드시 fixed 인코딩 사용.
-     */
     public static void writePackedFixed64(ByteArrayOutputStream out, int fieldNumber, long[] values) {
         if (values == null || values.length == 0) return;
         ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 8);
@@ -153,10 +137,6 @@ public final class ProtoEncoder {
         writeLengthDelimited(out, packed.toByteArray());
     }
 
-    /**
-     * Packed repeated double 필드 (OTLP HistogramDataPoint.explicit_bounds).
-     * Wire type = LEN, 각 값을 fixed64(little-endian IEEE 754)로 직렬화한다.
-     */
     public static void writePackedDouble(ByteArrayOutputStream out, int fieldNumber, double[] values) {
         if (values == null || values.length == 0) return;
         ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 8);
@@ -167,10 +147,6 @@ public final class ProtoEncoder {
 
     // ---- Hex 변환 (traceId / spanId) ----
 
-    /**
-     * 16진수 문자열을 byte[]로 변환한다.
-     * 전체가 0인 경우 null 반환 (필드 생략 처리).
-     */
     public static byte[] hexToBytes(String hex) {
         if (hex == null || hex.isEmpty()) return null;
         int len = hex.length();
@@ -184,24 +160,5 @@ public final class ProtoEncoder {
             if (data[i / 2] != 0) allZero = false;
         }
         return allZero ? null : data;
-    }
-
-    // ---- gRPC 5-byte 프레임 래퍼 ----
-
-    /**
-     * protobuf bytes를 gRPC length-prefix 메시지로 래핑한다.
-     *
-     * <p>포맷: [0x00 (no compression)] [4 bytes big-endian length] [proto bytes]
-     */
-    public static byte[] wrapGrpcFrame(byte[] protoBytes) {
-        byte[] frame = new byte[5 + protoBytes.length];
-        frame[0] = 0x00; // compressed-flag = false
-        int len = protoBytes.length;
-        frame[1] = (byte)(len >> 24);
-        frame[2] = (byte)(len >> 16);
-        frame[3] = (byte)(len >>  8);
-        frame[4] = (byte) len;
-        System.arraycopy(protoBytes, 0, frame, 5, protoBytes.length);
-        return frame;
     }
 }

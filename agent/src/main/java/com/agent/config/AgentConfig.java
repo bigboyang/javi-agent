@@ -6,19 +6,13 @@ import java.util.stream.Collectors;
 
 /**
  * 환경변수/시스템 프로퍼티에서 에이전트 설정을 읽는다. (Bootstrap Configuration)
- * 
- * [개선 사항]
- * 1. Singleton 패턴 적용: 호출 시마다 매번 환경변수를 파싱하지 않고 캐싱된 인스턴스를 반환한다.
- * 2. Immutable 설계: 한 번 로드된 설정은 변경되지 않으며, 동적 변경은 RemoteConfig가 담당한다.
- * 3. Lazy Loading: 클래스 로딩 시점에 안전하게 초기화한다.
+ * 모든 전송은 OTLP/HTTP Protobuf 방식을 사용한다.
  */
 public final class AgentConfig {
-    public static final String DEFAULT_ENDPOINT = "http://localhost:4318/v1/traces";
+    public static final String DEFAULT_ENDPOINT = "http://localhost:4318";
     public static final String DEFAULT_SERVICE_NAME = "javi-service";
     public static final double DEFAULT_SAMPLE_RATE = 1.0;
-    public static final String DEFAULT_PROTOCOL = "http";
 
-    // Singleton Instance
     private static final AgentConfig INSTANCE = loadInternal();
 
     private final String exporterEndpoint;
@@ -29,16 +23,13 @@ public final class AgentConfig {
     private final List<String> criticalUrls;
     private final int clusterMinSamples;
     private final long targetSps;
-    private final String exporterProtocol;
-    private final String grpcEndpoint;
     private final long tailSamplingTtlMs;
     private final int tailSamplingMaxPendingTraces;
 
     private AgentConfig(String exporterEndpoint, String serviceName, double sampleRate,
                         boolean tailSamplingEnabled, long slowThresholdMs,
                         List<String> criticalUrls, int clusterMinSamples, long targetSps,
-                        String exporterProtocol, String grpcEndpoint,
-                        long tailSamplingTtlMs, int tailSamplingMaxPendingTraces) {
+                        long tailTtlMs, int tailMaxPending) {
         this.exporterEndpoint = exporterEndpoint;
         this.serviceName = serviceName;
         this.sampleRate = sampleRate;
@@ -47,29 +38,15 @@ public final class AgentConfig {
         this.criticalUrls = criticalUrls;
         this.clusterMinSamples = clusterMinSamples;
         this.targetSps = targetSps;
-        this.exporterProtocol = exporterProtocol;
-        this.grpcEndpoint = grpcEndpoint;
-        this.tailSamplingTtlMs = tailSamplingTtlMs;
-        this.tailSamplingMaxPendingTraces = tailSamplingMaxPendingTraces;
+        this.tailSamplingTtlMs = tailTtlMs;
+        this.tailSamplingMaxPendingTraces = tailMaxPending;
     }
 
-    /**
-     * 캐싱된 에이전트 설정을 반환한다. (상용 APM 방식)
-     * 호출 시마다 환경변수를 다시 읽지 않으므로 성능 오버헤드가 없다.
-     */
-    public static AgentConfig get() {
-        return INSTANCE;
-    }
-
-    /**
-     * 하위 호환성을 위해 유지하되, 내부적으로는 캐싱된 인스턴스를 반환한다.
-     */
-    public static AgentConfig load() {
-        return INSTANCE;
-    }
+    public static AgentConfig get() { return INSTANCE; }
+    public static AgentConfig load() { return INSTANCE; }
 
     private static AgentConfig loadInternal() {
-        String endpoint = read("JAVI_EXPORTER_ENDPOINT", "javi.exporter.endpoint", DEFAULT_ENDPOINT);
+        String endpoint = read("JAVI_COLLECTOR_ENDPOINT", "javi.collector.endpoint", DEFAULT_ENDPOINT);
         String service = read("JAVI_SERVICE_NAME", "javi.service.name", DEFAULT_SERVICE_NAME);
         double rate = parseDouble(read("JAVI_SAMPLE_RATE", "javi.sample.rate", String.valueOf(DEFAULT_SAMPLE_RATE)));
 
@@ -85,25 +62,16 @@ public final class AgentConfig {
         int minSamples = Integer.parseInt(read("JAVI_CLUSTER_MIN_SAMPLES", "javi.cluster.min.samples", "5"));
         long targetSps = parseLong(read("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
 
-        String protocol = read("JAVI_EXPORTER_PROTOCOL", "javi.exporter.protocol", "grpc");
-        String grpcEndpoint = read("JAVI_GRPC_ENDPOINT", "javi.grpc.endpoint", "http://localhost:4318");
-
         long tailTtlMs = parseLong(read("JAVI_TAIL_SAMPLING_TTL_MS", "javi.tail.sampling.ttl.ms", "30000"));
         int tailMaxPending = Integer.parseInt(read("JAVI_TAIL_SAMPLING_MAX_PENDING", "javi.tail.sampling.max.pending", "10000"));
 
-        AgentConfig config = new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,
-                targetSps, protocol, grpcEndpoint, tailTtlMs, tailMaxPending);
+        com.agent.logs.AgentLogger.info("[AgentConfig] OTLP/HTTP Protobuf 전송 설정 로드됨: endpoint=" + endpoint + ", service=" + service);
         
-        // 초기 로드 정보 출력 (상용 APM은 부팅 시 설정을 투명하게 보여준다)
-        com.agent.logs.AgentLogger.info("[AgentConfig] Configuration Loaded: serviceName=" + service + ", sampleRate=" + rate 
-                + ", protocol=" + protocol + ", endpoint=" + (protocol.equals("grpc") ? grpcEndpoint : endpoint));
-        
-        return config;
+        return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,
+                targetSps, tailTtlMs, tailMaxPending);
     }
 
     public long getTargetSps() { return targetSps; }
-    public String getExporterProtocol() { return exporterProtocol; }
-    public String getGrpcEndpoint() { return grpcEndpoint; }
     public int getClusterMinSamples() { return clusterMinSamples; }
     public List<String> getCriticalUrls() { return criticalUrls; }
     public String getExporterEndpoint() { return exporterEndpoint; }
@@ -118,23 +86,14 @@ public final class AgentConfig {
         String val = System.getenv(envKey);
         if (val != null && !val.isEmpty()) return val;
         val = System.getProperty(propKey);
-        if (val != null && !val.isEmpty()) return val;
-        return defaultValue;
+        return (val != null && !val.isEmpty()) ? val : defaultValue;
     }
 
     private static double parseDouble(String s) {
-        try {
-            return Double.parseDouble(s);
-        } catch (NumberFormatException e) {
-            return DEFAULT_SAMPLE_RATE;
-        }
+        try { return Double.parseDouble(s); } catch (Exception e) { return DEFAULT_SAMPLE_RATE; }
     }
 
     private static long parseLong(String s) {
-        try {
-            return Long.parseLong(s);
-        } catch (NumberFormatException e) {
-            return 500L;
-        }
+        try { return Long.parseLong(s); } catch (Exception e) { return 500L; }
     }
 }

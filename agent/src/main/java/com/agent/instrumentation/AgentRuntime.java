@@ -8,21 +8,17 @@ import com.agent.logs.TraceLogger;
 import com.agent.sampler.AdaptiveSampler;
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
-import com.agent.common.grpc.GrpcSender;
-import com.agent.common.OtlpHttpSender;
-import com.agent.logs.OtlpGrpcLogExporter;
+import com.agent.common.OtlpHttpProtobufSender;
 import com.agent.logs.OtlpHttpLogExporter;
 import com.agent.logs.SdkLoggerProvider;
 import com.agent.metric.CompositeMetricExporter;
 import com.agent.metric.FileMetricExporter;
-import com.agent.metric.OtlpGrpcMetricExporter;
 import com.agent.metric.OtlpHttpMetricExporter;
 import com.agent.metric.SdkMeterProvider;
 import com.agent.trace.SdkTracerProvider;
 import com.agent.trace.Tracer;
 import com.agent.trace.exporter.CompositeSpanExporter;
 import com.agent.trace.exporter.LoggingSpanExporter;
-import com.agent.trace.exporter.OtlpGrpcSpanExporter;
 import com.agent.trace.exporter.OtlpHttpSpanExporter;
 import com.agent.trace.exporter.SpanExporter;
 import java.util.Arrays;
@@ -37,34 +33,22 @@ public final class AgentRuntime {
 
     static {
         AgentConfig config = AgentConfig.load();
-        String protocol = config.getExporterProtocol().toLowerCase();
+        
+        // 전송 방식 통일: OTLP/HTTP Protobuf
+        OtlpHttpProtobufSender sharedSender = OtlpHttpProtobufSender.create(config.getExporterEndpoint(), 10_000L);
+        
+        SpanExporter spanExporter = buildSpanExporter(config, sharedSender);
+        
+        // 로그 및 메트릭 Exporter도 Protobuf Sender 공유
+        SdkLoggerProvider loggerProvider = new SdkLoggerProvider(
+                new OtlpHttpLogExporter(config.getServiceName(), sharedSender));
+        
+        SdkMeterProvider meterProvider = new SdkMeterProvider(
+                CompositeMetricExporter.of(
+                        new FileMetricExporter(),
+                        new OtlpHttpMetricExporter(config.getServiceName(), sharedSender)));
 
-        SpanExporter spanExporter;
-        SdkLoggerProvider loggerProvider;
-        SdkMeterProvider meterProvider;
-
-        // 성능 최적화: Protobuf 기본으로 사용 (JSON 직렬화 오버헤드 제거)
-        if ("http".equals(protocol)) {
-            // 기본값: (http)
-            GrpcSender sharedGrpc = GrpcSender.create(config.getGrpcEndpoint(), 10_000L);
-            spanExporter = buildGrpcSpanExporter(config, sharedGrpc);
-            loggerProvider = new SdkLoggerProvider(new OtlpGrpcLogExporter(config.getServiceName(), sharedGrpc));
-            meterProvider = new SdkMeterProvider(
-                    CompositeMetricExporter.of(
-                            new FileMetricExporter(),
-                            new OtlpGrpcMetricExporter(config.getServiceName(), sharedGrpc)));
-            AgentLogger.info("프로토콜: gRPC (Protobuf) endpoint=" + config.getGrpcEndpoint());
-        } else {
-            // TODO : gRPC 전송 방식 구현 (현재 http로 설정되어 있음, 변경 필요)
-            OtlpHttpSender sharedHttp = OtlpHttpSender.create();
-            spanExporter = buildHttpSpanExporter(config, sharedHttp);
-            loggerProvider = new SdkLoggerProvider(new OtlpHttpLogExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp));
-            meterProvider = new SdkMeterProvider(
-                    CompositeMetricExporter.of(
-                            new FileMetricExporter(),
-                            new OtlpHttpMetricExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp)));
-            AgentLogger.info("프로토콜: HTTP (Protobuf) endpoint=" + config.getExporterEndpoint());
-        }
+        AgentLogger.info("전송 프로토콜: OTLP/HTTP Protobuf (endpoint=" + config.getExporterEndpoint() + ")");
 
         Sampler sampler;
         AdaptiveSampler adaptiveSampler = null;
@@ -131,26 +115,13 @@ public final class AgentRuntime {
         return PROVIDER;
     }
 
-    private static SpanExporter buildGrpcSpanExporter(AgentConfig config, GrpcSender grpcSender) {
+    private static SpanExporter buildSpanExporter(AgentConfig config, OtlpHttpProtobufSender sender) {
         LoggingSpanExporter loggingExporter = new LoggingSpanExporter();
         try {
-            SpanExporter otlpExporter = new OtlpGrpcSpanExporter(config.getServiceName(), grpcSender);
-            // LoggingSpanExporter를 앞에 두어 Collector 없이도 로그에 스팬이 출력됨
+            SpanExporter otlpExporter = new OtlpHttpSpanExporter(config.getExporterEndpoint(), config.getServiceName(), sender);
             return CompositeSpanExporter.create(Arrays.asList(loggingExporter, otlpExporter));
         } catch (Exception e) {
-            AgentLogger.warn("OTLP gRPC exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
-            return loggingExporter;
-        }
-    }
-
-    private static SpanExporter buildHttpSpanExporter(AgentConfig config, OtlpHttpSender httpSender) {
-        LoggingSpanExporter loggingExporter = new LoggingSpanExporter();
-        try {
-            SpanExporter otlpExporter = new OtlpHttpSpanExporter(config.getExporterEndpoint(), config.getServiceName(), httpSender);
-            // LoggingSpanExporter를 앞에 두어 Collector 없이도 로그에 스팬이 출력됨
-            return CompositeSpanExporter.create(Arrays.asList(loggingExporter, otlpExporter));
-        } catch (Exception e) {
-            AgentLogger.warn("OTLP HTTP exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
+            AgentLogger.warn("OTLP HTTP Protobuf exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());
             return loggingExporter;
         }
     }

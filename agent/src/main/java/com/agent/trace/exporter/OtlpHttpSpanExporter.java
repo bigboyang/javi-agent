@@ -1,7 +1,8 @@
 package com.agent.trace.exporter;
 
-import com.agent.common.OtlpHttpSender;
-import com.agent.common.OtlpHttpSender.SendResult;
+import com.agent.common.OtlpHttpProtobufSender;
+import com.agent.common.OtlpHttpProtobufSender.SendResult;
+import com.agent.common.ProtoEncoder;
 import com.agent.common.ResourceInfo;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.logs.AgentLogger;
@@ -13,9 +14,13 @@ import com.agent.span.SpanEvent;
 import com.agent.span.SpanKind;
 import com.agent.span.SpanLink;
 import com.agent.span.SpanStatus;
+import com.agent.trace.InstrumentationScopeInfo;
 
-import java.net.URI;
+import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -23,393 +28,272 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * OTLP/HTTP JSON 방식으로 Span을 OTel Collector로 전송한다.
- *
- * <p>OTLP Traces 스펙 (opentelemetry-proto/trace/v1/trace.proto):
- * <pre>
- * ExportTraceServiceRequest
- *   └─ resourceSpans[]
- *        ├─ resource { attributes[] }
- *        └─ scopeSpans[]
- *             ├─ scope { name, version }
- *             └─ spans[]
- *                  ├─ traceId, spanId, parentSpanId
- *                  ├─ name, kind
- *                  ├─ startTimeUnixNano, endTimeUnixNano
- *                  ├─ attributes[], droppedAttributesCount
- *                  ├─ events[], droppedEventsCount
- *                  ├─ links[]
- *                  └─ status { code, message }
- * </pre>
- *
- * <p>설계 변경 (OtlpHttpSender 위임):
- * <ul>
- *   <li>HTTP 재시도 / 타임아웃 / 헤더 관리를 OtlpHttpSender에 위임</li>
- *   <li>이 클래스는 Span → JSON 직렬화와 엔드포인트 라우팅만 담당</li>
- *   <li>자체 HttpClient 미보유 → 연결 자원 중복 방지</li>
- * </ul>
- *
- * <p>SpanDrop 필터: RemoteConfigHolder.get().getSpanDrop()의 키에 해당하는 속성은
- * 직렬화에서 제외되어 네트워크와 백엔드 저장소 부하를 줄인다.
- *
- * <p>설정:
- * <ul>
- *   <li>JAVI_COLLECTOR_ENDPOINT / javi.collector.endpoint (기본: http://localhost:4318)</li>
- *   <li>JAVI_COLLECTOR_TIMEOUT_MS / javi.collector.timeout.ms (기본: 10000)</li>
- *   <li>JAVI_SERVICE_NAME / javi.service.name (기본: javi-service)</li>
- * </ul>
+ * OTLP/HTTP Protobuf 방식으로 Span을 OTel Collector로 전송한다.
  */
 public final class OtlpHttpSpanExporter implements SpanExporter {
 
-    private static final String PATH = "/v1/traces";
+    private static final String TRACE_PATH = "/v1/traces";
 
-    // ---- 내부 상태 ----
-    private final URI endpoint;
+    // ---- Span proto field numbers ----
+    private static final int FN_SPAN_TRACE_ID      = 1;
+    private static final int FN_SPAN_SPAN_ID       = 2;
+    private static final int FN_SPAN_PARENT_ID     = 4;
+    private static final int FN_SPAN_NAME          = 5;
+    private static final int FN_SPAN_KIND          = 6;
+    private static final int FN_SPAN_START_NS      = 7;
+    private static final int FN_SPAN_END_NS        = 8;
+    private static final int FN_SPAN_ATTRS         = 9;
+    private static final int FN_SPAN_DROPPED_ATTRS = 10;
+    private static final int FN_SPAN_EVENTS        = 11;
+    private static final int FN_SPAN_DROPPED_EVTS  = 12;
+    private static final int FN_SPAN_LINKS         = 13;
+    private static final int FN_SPAN_STATUS        = 15;
+
+    private static final int FN_STATUS_MESSAGE = 2;
+    private static final int FN_STATUS_CODE    = 3;
+    private static final int FN_EVENT_TIME_NS = 1;
+    private static final int FN_EVENT_NAME    = 2;
+    private static final int FN_EVENT_ATTRS   = 3;
+    private static final int FN_LINK_TRACE_ID = 1;
+    private static final int FN_LINK_SPAN_ID  = 2;
+    private static final int FN_LINK_ATTRS    = 3;
+    private static final int FN_RESOURCE_SPANS = 1;
+    private static final int FN_RS_RESOURCE    = 1;
+    private static final int FN_RS_SCOPE_SPANS = 2;
+    private static final int FN_SS_SCOPE       = 1;
+    private static final int FN_SS_SPANS       = 2;
+    private static final int FN_SCOPE_NAME     = 1;
+    private static final int FN_SCOPE_VERSION  = 2;
+    private static final int FN_RESOURCE_ATTRS = 1;
+    private static final int FN_KV_KEY      = 1;
+    private static final int FN_KV_VALUE    = 2;
+    private static final int FN_AV_STRING   = 1;
+    private static final int FN_AV_BOOL     = 2;
+    private static final int FN_AV_INT      = 3;
+    private static final int FN_AV_DOUBLE   = 4;
+
+    private static final InstrumentationScopeInfo DEFAULT_SCOPE =
+            new InstrumentationScopeInfo("javi-agent", "1.0.0", null);
+
+    private final OtlpHttpProtobufSender sender;
     private final String serviceName;
-    private final OtlpHttpSender sender;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
+    private final AtomicLong exportedSpans = new AtomicLong(0);
+    private final AtomicLong droppedSpans  = new AtomicLong(0);
+    private volatile byte[] cachedResourceBytes;
 
-    // 파이프라인 헬스 카운터
-    private final AtomicLong exportedSpans  = new AtomicLong(0);
-    private final AtomicLong droppedSpans   = new AtomicLong(0);
-    private final AtomicLong failedBatches  = new AtomicLong(0);
-
-    // ---- 생성자 ----
-
-    /**
-     * 환경변수/시스템 프로퍼티에서 설정을 읽어 기본 인스턴스를 생성한다.
-     * AgentRuntime이 endpoint / serviceName을 직접 지정할 때는 아래 생성자를 사용한다.
-     */
     public OtlpHttpSpanExporter() {
-        this(
-            resolveEndpoint(),
-            resolveServiceName(),
-            OtlpHttpSender.create()
-        );
+        this(resolveServiceName(), OtlpHttpProtobufSender.create());
     }
 
-    /**
-     * AgentRuntime / 테스트에서 명시적으로 endpoint와 serviceName을 지정할 때 사용한다.
-     *
-     * @param endpointBase 기본 URL (예: http://localhost:4318 또는 http://localhost:4318/v1/traces)
-     * @param serviceName  service.name 리소스 속성 값
-     */
-    public OtlpHttpSpanExporter(String endpointBase, String serviceName) {
-        this(endpointBase, serviceName, OtlpHttpSender.create());
-    }
-
-    /**
-     * 테스트 또는 공유 sender 주입용 생성자.
-     *
-     * @param endpointBase 기본 URL
-     * @param serviceName  service.name 리소스 속성 값
-     * @param sender       공유 또는 전용 OtlpHttpSender 인스턴스
-     */
-    public OtlpHttpSpanExporter(String endpointBase, String serviceName, OtlpHttpSender sender) {
-        String base = endpointBase.endsWith(PATH)
-                ? endpointBase
-                : endpointBase.replaceAll("/+$", "") + PATH;
-        this.endpoint    = URI.create(base);
+    public OtlpHttpSpanExporter(String serviceName, OtlpHttpProtobufSender sender) {
         this.serviceName = serviceName;
         this.sender      = sender;
     }
 
-    // ---- SpanExporter 구현 ----
+    // AgentRuntime에서 사용할 수 있도록 endpoint 받는 생성자 추가
+    public OtlpHttpSpanExporter(String endpoint, String serviceName, OtlpHttpProtobufSender sender) {
+        this.serviceName = serviceName;
+        this.sender = sender;
+    }
 
     @Override
     public CompletableResultCode export(Collection<Span> spans) {
-        if (isShutdown.get() || spans == null || spans.isEmpty()) {
-            return CompletableResultCode.ofSuccess();
+        if (isShutdown.get() || spans == null || spans.isEmpty()) return CompletableResultCode.ofSuccess();
+        try {
+            byte[] protoBytes = encodeExportRequestWithResource(spans, getResourceBytes());
+            SendResult result = sender.send(TRACE_PATH, protoBytes);
+
+            if (result == SendResult.SUCCESS) {
+                exportedSpans.addAndGet(spans.size());
+                return CompletableResultCode.ofSuccess();
+            }
+            droppedSpans.addAndGet(spans.size());
+            return CompletableResultCode.ofFailure();
+        } catch (Exception e) {
+            AgentLogger.warn("OtlpHttpSpanExporter: 인코딩 오류 — " + e.getMessage());
+            droppedSpans.addAndGet(spans.size());
+            return CompletableResultCode.ofFailure();
         }
-
-        String json = toJson(spans, serviceName);
-        SendResult result = sender.send(endpoint, json);
-
-        if (result == SendResult.SUCCESS) {
-            exportedSpans.addAndGet(spans.size());
-            AgentLogger.debug("OtlpHttpSpanExporter: export 성공 spans=" + spans.size());
-            return CompletableResultCode.ofSuccess();
-        }
-
-        droppedSpans.addAndGet(spans.size());
-        failedBatches.incrementAndGet();
-        AgentLogger.warn("OtlpHttpSpanExporter: 배치 전송 실패 spans=" + spans.size()
-                + " dropped_total=" + droppedSpans.get());
-        return CompletableResultCode.ofFailure();
     }
 
     @Override
-    public CompletableResultCode flush() {
-        return CompletableResultCode.ofSuccess();
-    }
+    public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
 
     @Override
     public CompletableResultCode shutdown() {
-        if (isShutdown.compareAndSet(false, true)) {
-            AgentLogger.info("OtlpHttpSpanExporter shutdown: exported=" + exportedSpans.get()
-                    + " dropped=" + droppedSpans.get()
-                    + " failed_batches=" + failedBatches.get());
-            // sender의 shutdown은 소유권에 따라 호출자가 결정.
-            // 단독 소유(AgentRuntime이 이 exporter 전용으로 생성한 경우)면 아래 주석 해제.
-            // sender.shutdown();
-        }
+        isShutdown.set(true);
         return CompletableResultCode.ofSuccess();
     }
 
     @Override
-    public void close() {
-        shutdown().join(10, TimeUnit.SECONDS);
+    public void close() { shutdown().join(10, TimeUnit.SECONDS); }
+
+    private byte[] getResourceBytes() {
+        if (cachedResourceBytes == null) {
+            synchronized (this) {
+                if (cachedResourceBytes == null) cachedResourceBytes = encodeResource(serviceName);
+            }
+        }
+        return cachedResourceBytes;
     }
 
-    // ---- JSON 직렬화 ----
-
-    /**
-     * Span 컬렉션을 OTLP ExportTraceServiceRequest JSON으로 직렬화한다.
-     *
-     * <p>InstrumentationScope 단위 그룹핑은 생략하고 단일 scopeSpan에 모든 span을 넣는다.
-     * (그룹핑 비용 대비 Collector 처리에 영향 없음)
-     *
-     * <p>패키지-프라이빗: 단위 테스트에서 직접 검증 가능.
-     */
-    static String toJson(Collection<Span> spans, String serviceName) {
-        // 예상 용량: 스팬당 약 600B
-        StringBuilder sb = new StringBuilder(spans.size() * 600 + 512);
-
-        sb.append("{\"resourceSpans\":[{\"resource\":{\"attributes\":[");
-
-        // ResourceInfo에서 동적으로 모든 속성 가져오기
-        boolean firstResAttr = true;
-        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
-            if (!firstResAttr) sb.append(",");
-            firstResAttr = false;
-            appendStringAttr(sb, entry.getKey(), entry.getValue());
-        }
-
-        // service.name이 ResourceInfo에 없을 경우를 대비해 (이미 ResourceInfo에 포함되어 있지만 보장)
-        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
-            sb.append(",");
-            appendStringAttr(sb, "service.name", serviceName);
-        }
-
-        sb.append("]},\"scopeSpans\":[{\"scope\":{\"name\":\"agent-auto\",\"version\":\"1.0.0\"},\"spans\":[");
-
-        boolean firstSpan = true;
+    private byte[] encodeExportRequestWithResource(Collection<Span> spans, byte[] resourceBytes) {
+        Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
+        Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = new LinkedHashMap<>();
         for (Span span : spans) {
             if (!(span instanceof ReadableSpan)) continue;
             ReadableSpan rs = (ReadableSpan) span;
-            if (!firstSpan) sb.append(",");
-            firstSpan = false;
-            appendSpan(sb, rs);
+            InstrumentationScopeInfo scope = rs.getInstrumentationScopeInfo();
+            if (scope == null) scope = DEFAULT_SCOPE;
+            byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
         }
 
-        sb.append("]}]}]}");
-        return sb.toString();
+        ByteArrayOutputStream rsOut = new ByteArrayOutputStream(128 + spans.size() * 300);
+        ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
+
+        for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
+            InstrumentationScopeInfo scope = entry.getKey();
+            List<ReadableSpan> scopeSpanList = entry.getValue();
+
+            ByteArrayOutputStream spansOut = new ByteArrayOutputStream(scopeSpanList.size() * 300);
+            for (ReadableSpan rs : scopeSpanList) {
+                ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+            }
+
+            ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(64);
+            ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, scope.getName() != null ? scope.getName() : "javi-agent");
+            if (scope.getVersion() != null) ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
+
+            ByteArrayOutputStream scopeSpansOut = new ByteArrayOutputStream(64 + spansOut.size());
+            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
+            byte[] spansBytes = spansOut.toByteArray();
+            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
+
+            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+        }
+
+        ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rsOut.size() + 4);
+        ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_SPANS, rsOut.toByteArray());
+        return requestOut.toByteArray();
     }
 
-    private static void appendSpan(StringBuilder sb, ReadableSpan rs) {
+    private static byte[] encodeResource(String serviceName) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+        }
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] encodeSpan(ReadableSpan rs, Set<String> dropKeys) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
         SpanContext ctx = rs.getContext();
-        sb.append("{");
 
-        // 식별자
-        sb.append("\"traceId\":\"").append(ctx.getTraceId()).append("\",");
-        sb.append("\"spanId\":\"").append(ctx.getSpanId()).append("\",");
+        byte[] traceId = ProtoEncoder.hexToBytes(ctx.getTraceId());
+        byte[] spanId  = ProtoEncoder.hexToBytes(ctx.getSpanId());
+        if (traceId != null) ProtoEncoder.writeBytes(out, FN_SPAN_TRACE_ID, traceId);
+        if (spanId  != null) ProtoEncoder.writeBytes(out, FN_SPAN_SPAN_ID,  spanId);
 
-        String parentId = ctx.getParentSpanId();
-        if (parentId != null && !parentId.equals("0000000000000000")) {
-            sb.append("\"parentSpanId\":\"").append(parentId).append("\",");
+        byte[] parentId = ProtoEncoder.hexToBytes(ctx.getParentSpanId());
+        if (parentId != null) ProtoEncoder.writeBytes(out, FN_SPAN_PARENT_ID, parentId);
+
+        ProtoEncoder.writeString(out, FN_SPAN_NAME, rs.getName());
+        ProtoEncoder.writeVarint32(out, FN_SPAN_KIND, kindToOtlp(rs.getKind()));
+        ProtoEncoder.writeFixed64Field(out, FN_SPAN_START_NS, rs.getStartTimeNanos());
+        ProtoEncoder.writeFixed64Field(out, FN_SPAN_END_NS,   rs.getEndTimeNanos());
+
+        if (rs.getAttributes() != null) {
+            for (Map.Entry<AttributeKey<?>, Object> entry : rs.getAttributes().entrySet()) {
+                String key = entry.getKey().getKey();
+                if (!dropKeys.isEmpty() && dropKeys.contains(key)) continue;
+                byte[] kv = encodeAnyKV(key, entry.getValue());
+                if (kv != null) ProtoEncoder.writeMessage(out, FN_SPAN_ATTRS, kv);
+            }
         }
 
-        // 이름 / 종류
-        sb.append("\"name\":\"").append(escapeJson(rs.getName())).append("\",");
-        sb.append("\"kind\":").append(kindToOtlp(rs.getKind())).append(",");
-
-        // 타임스탬프 (string: int64)
-        sb.append("\"startTimeUnixNano\":\"").append(rs.getStartTimeNanos()).append("\",");
-        sb.append("\"endTimeUnixNano\":\"").append(rs.getEndTimeNanos()).append("\",");
-
-        // 속성
-        sb.append("\"attributes\":[");
-        Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
-        appendSpanAttributes(sb, rs.getAttributes(), dropKeys);
-        sb.append("],");
-
-        // droppedAttributesCount
         int droppedAttrs = rs.getDroppedAttributeCount();
-        if (droppedAttrs > 0) {
-            sb.append("\"droppedAttributesCount\":").append(droppedAttrs).append(",");
+        if (droppedAttrs > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_ATTRS, droppedAttrs);
+
+        if (rs.getEvents() != null) {
+            for (SpanEvent event : rs.getEvents()) {
+                ProtoEncoder.writeMessage(out, FN_SPAN_EVENTS, encodeEvent(event));
+            }
         }
+        
+        byte[] statusBytes = encodeStatus(rs.getStatus(), rs.getStatusDescription());
+        if (statusBytes.length > 0) ProtoEncoder.writeMessage(out, FN_SPAN_STATUS, statusBytes);
 
-        // events
-        sb.append("\"events\":[");
-        appendEvents(sb, rs.getEvents());
-        sb.append("],");
-
-        // droppedEventsCount
-        int droppedEvents = rs.getDroppedEventCount();
-        if (droppedEvents > 0) {
-            sb.append("\"droppedEventsCount\":").append(droppedEvents).append(",");
-        }
-
-        // links
-        sb.append("\"links\":[");
-        appendLinks(sb, rs.getLinks());
-        sb.append("],");
-
-        // status
-        sb.append("\"status\":{\"code\":").append(statusToOtlp(rs.getStatus()));
-        String desc = rs.getStatusDescription();
-        if (desc != null && !desc.isEmpty()) {
-            sb.append(",\"message\":\"").append(escapeJson(desc)).append("\"");
-        }
-        sb.append("}");
-
-        sb.append("}");
+        return out.toByteArray();
     }
 
-    private static void appendSpanAttributes(
-            StringBuilder sb,
-            Map<AttributeKey<?>, Object> attrs,
-            Set<String> dropKeys) {
-
-        if (attrs == null || attrs.isEmpty()) return;
-
-        boolean first = true;
-        for (Map.Entry<AttributeKey<?>, Object> entry : attrs.entrySet()) {
-            String key = entry.getKey().getKey();
-            // spanDrop 필터: 원격 설정에서 지정된 키는 내보내지 않음
-            if (!dropKeys.isEmpty() && dropKeys.contains(key)) continue;
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("{\"key\":\"").append(escapeJson(key)).append("\",\"value\":");
-            appendAttrValue(sb, entry.getValue());
-            sb.append("}");
+    private static byte[] encodeEvent(SpanEvent event) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
+        ProtoEncoder.writeFixed64Field(out, FN_EVENT_TIME_NS, event.getTimestampNanos());
+        ProtoEncoder.writeString(out, FN_EVENT_NAME, event.getName());
+        if (event.getAttributes() != null) {
+            for (Map.Entry<AttributeKey<?>, Object> e : event.getAttributes().entrySet()) {
+                byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
+                if (kv != null) ProtoEncoder.writeMessage(out, FN_EVENT_ATTRS, kv);
+            }
         }
+        return out.toByteArray();
     }
 
-    private static void appendEvents(StringBuilder sb, java.util.List<SpanEvent> events) {
-        if (events == null || events.isEmpty()) return;
-
-        boolean first = true;
-        for (SpanEvent event : events) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("{");
-            sb.append("\"timeUnixNano\":\"").append(event.getTimestampNanos()).append("\",");
-            sb.append("\"name\":\"").append(escapeJson(event.getName())).append("\",");
-            sb.append("\"attributes\":[");
-            appendEventAttributes(sb, event.getAttributes());
-            sb.append("]}");
-        }
+    private static byte[] encodeStatus(SpanStatus status, String description) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(16);
+        int code = (status == SpanStatus.OK) ? 1 : (status == SpanStatus.ERROR) ? 2 : 0;
+        if (code != 0) ProtoEncoder.writeVarint32(out, FN_STATUS_CODE, code);
+        if (description != null && !description.isEmpty()) ProtoEncoder.writeString(out, FN_STATUS_MESSAGE, description);
+        return out.toByteArray();
     }
 
-    private static void appendEventAttributes(StringBuilder sb, Map<AttributeKey<?>, Object> attrs) {
-        if (attrs == null || attrs.isEmpty()) return;
-        boolean first = true;
-        for (Map.Entry<AttributeKey<?>, Object> entry : attrs.entrySet()) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("{\"key\":\"").append(escapeJson(entry.getKey().getKey())).append("\",\"value\":");
-            appendAttrValue(sb, entry.getValue());
-            sb.append("}");
-        }
+    private static byte[] encodeStringKV(String key, String value) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + value.length() + 8);
+        ProtoEncoder.writeString(out, FN_KV_KEY, key);
+        ByteArrayOutputStream av = new ByteArrayOutputStream(value.length() + 4);
+        ProtoEncoder.writeString(av, FN_AV_STRING, value);
+        ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
+        return out.toByteArray();
     }
 
-    private static void appendLinks(StringBuilder sb, java.util.List<SpanLink> links) {
-        if (links == null || links.isEmpty()) return;
-        boolean first = true;
-        for (SpanLink link : links) {
-            if (!first) sb.append(",");
-            first = false;
-            SpanContext ctx = link.getSpanContext();
-            sb.append("{");
-            sb.append("\"traceId\":\"").append(ctx.getTraceId()).append("\",");
-            sb.append("\"spanId\":\"").append(ctx.getSpanId()).append("\",");
-            sb.append("\"attributes\":[]");
-            sb.append("}");
-        }
+    private static byte[] encodeAnyKV(String key, Object value) {
+        ByteArrayOutputStream avOut = new ByteArrayOutputStream(32);
+        if (value instanceof String) {
+            ProtoEncoder.writeString(avOut, FN_AV_STRING, (String) value);
+        } else if (value instanceof Long || value instanceof Integer) {
+            ProtoEncoder.writeTag(avOut, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
+            ProtoEncoder.writeRawVarint64(avOut, ((Number) value).longValue());
+        } else if (value instanceof Double || value instanceof Float) {
+            ProtoEncoder.writeDoubleField(avOut, FN_AV_DOUBLE, ((Number) value).doubleValue());
+        } else if (value instanceof Boolean) {
+            ProtoEncoder.writeVarint32(avOut, FN_AV_BOOL, (Boolean) value ? 1 : 0);
+        } else if (value != null) {
+            ProtoEncoder.writeString(avOut, FN_AV_STRING, value.toString());
+        } else return null;
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + avOut.size() + 8);
+        ProtoEncoder.writeString(out, FN_KV_KEY, key);
+        ProtoEncoder.writeMessage(out, FN_KV_VALUE, avOut.toByteArray());
+        return out.toByteArray();
     }
 
-    // ---- 타입 변환 ----
-
-    /**
-     * OTLP SpanKind 매핑.
-     * INTERNAL=1, SERVER=2, CLIENT=3, PRODUCER=4, CONSUMER=5
-     */
     private static int kindToOtlp(SpanKind kind) {
         if (kind == null) return 1;
         switch (kind) {
-            case SERVER:   return 2;
-            case CLIENT:   return 3;
+            case SERVER: return 2;
+            case CLIENT: return 3;
             case PRODUCER: return 4;
             case CONSUMER: return 5;
-            default:       return 1; // INTERNAL
+            default: return 1;
         }
-    }
-
-    /**
-     * OTLP Status.StatusCode 매핑.
-     * STATUS_CODE_UNSET=0, STATUS_CODE_OK=1, STATUS_CODE_ERROR=2
-     */
-    private static int statusToOtlp(SpanStatus status) {
-        if (status == null) return 0;
-        switch (status) {
-            case OK:    return 1;
-            case ERROR: return 2;
-            default:    return 0; // UNSET
-        }
-    }
-
-    /**
-     * AttributeValue → OTLP AnyValue JSON.
-     * OTLP int64는 string으로 직렬화 (JSON number 정밀도 손실 방지).
-     */
-    private static void appendAttrValue(StringBuilder sb, Object value) {
-        if (value instanceof String) {
-            sb.append("{\"stringValue\":\"").append(escapeJson((String) value)).append("\"}");
-        } else if (value instanceof Long) {
-            sb.append("{\"intValue\":\"").append(value).append("\"}");
-        } else if (value instanceof Integer) {
-            sb.append("{\"intValue\":\"").append(value).append("\"}");
-        } else if (value instanceof Double || value instanceof Float) {
-            sb.append("{\"doubleValue\":").append(value).append("}");
-        } else if (value instanceof Boolean) {
-            sb.append("{\"boolValue\":").append(value).append("}");
-        } else if (value != null) {
-            sb.append("{\"stringValue\":\"").append(escapeJson(value.toString())).append("\"}");
-        } else {
-            sb.append("{\"stringValue\":\"\"}");
-        }
-    }
-
-    private static void appendStringAttr(StringBuilder sb, String key, String value) {
-        sb.append("{\"key\":\"").append(escapeJson(key))
-          .append("\",\"value\":{\"stringValue\":\"").append(escapeJson(value)).append("\"}}");
-    }
-
-    /**
-     * JSON 특수문자 이스케이프.
-     * null 입력은 빈 문자열로 처리한다.
-     */
-    static String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
-    // ---- 설정 읽기 ----
-
-    private static String resolveEndpoint() {
-        return OtlpHttpSender.get(
-                "JAVI_COLLECTOR_ENDPOINT", "javi.collector.endpoint",
-                "http://localhost:4318");
     }
 
     private static String resolveServiceName() {
-        return OtlpHttpSender.get(
-                "JAVI_SERVICE_NAME", "javi.service.name",
-                "javi-service");
+        String val = System.getenv("JAVI_SERVICE_NAME");
+        return (val != null && !val.isEmpty()) ? val : System.getProperty("javi.service.name", "javi-service");
     }
 }

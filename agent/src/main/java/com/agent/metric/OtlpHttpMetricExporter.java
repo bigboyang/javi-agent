@@ -1,394 +1,257 @@
 package com.agent.metric;
 
 import com.agent.common.DataExporter;
-import com.agent.common.OtlpHttpSender;
-import com.agent.common.OtlpHttpSender.SendResult;
+import com.agent.common.OtlpHttpProtobufSender;
+import com.agent.common.OtlpHttpProtobufSender.SendResult;
+import com.agent.common.ProtoEncoder;
 import com.agent.common.ResourceInfo;
 import com.agent.logs.AgentLogger;
 
-import java.net.URI;
+import java.io.ByteArrayOutputStream;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * MetricData를 OTLP/HTTP JSON 포맷으로 /v1/metrics 엔드포인트에 전송하는 Exporter.
- *
- * <p>OTLP Metrics 스펙 (opentelemetry-proto/metrics/v1/metrics.proto):
- * <pre>
- * ExportMetricsServiceRequest
- *   └─ resourceMetrics[]
- *        ├─ resource { attributes[] }
- *        └─ scopeMetrics[]
- *             ├─ scope { name, version }
- *             └─ metrics[]
- *                  ├─ name (string)
- *                  ├─ description (string)
- *                  ├─ unit (string)
- *                  └─ [gauge|sum|histogram]
- *                       └─ dataPoints[]
- *                            ├─ asDouble (number)
- *                            ├─ timeUnixNano (string)
- *                            └─ attributes[]
- * </pre>
- *
- * <p>MetricType 매핑:
- * <ul>
- *   <li>GAUGE → gauge.dataPoints[]</li>
- *   <li>SUM   → sum.dataPoints[] (aggregationTemporality=CUMULATIVE, isMonotonic=true)</li>
- *   <li>HISTOGRAM → histogram.dataPoints[] — Point.value를 sum으로, count=1 처리</li>
- * </ul>
- *
- * <p>Cardinality 안전: 각 Point의 attributes는 Map<String,String>으로 고정.
- * 키 개수를 스펙 권장 20개 이하로 유지할 책임은 상위 계층(MetricRegistry)에 있다.
- *
- * <p>설정:
- * <ul>
- *   <li>JAVI_COLLECTOR_ENDPOINT / javi.collector.endpoint (기본: http://localhost:4318)</li>
- *   <li>JAVI_COLLECTOR_TIMEOUT_MS / javi.collector.timeout.ms (기본: 10000)</li>
- *   <li>JAVI_SERVICE_NAME / javi.service.name (기본: javi-service)</li>
- * </ul>
+ * MetricData를 OTLP/HTTP Protobuf 포맷으로 OTel Collector에 전송하는 Exporter.
  */
 public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
 
-    private static final String PATH = "/v1/metrics";
-
-    // OTLP aggregationTemporality: DELTA=1, CUMULATIVE=2
+    private static final String METRIC_PATH = "/v1/metrics";
     private static final int TEMPORALITY_CUMULATIVE = 2;
 
-    // ---- 내부 상태 ----
-    private final URI endpoint;
+    // ---- Metric proto field numbers ----
+    private static final int FN_METRIC_NAME        = 1;
+    private static final int FN_METRIC_DESCRIPTION = 2;
+    private static final int FN_METRIC_UNIT        = 3;
+    private static final int FN_METRIC_GAUGE       = 5;
+    private static final int FN_METRIC_SUM         = 7;
+    private static final int FN_METRIC_HISTOGRAM   = 9;
+    private static final int FN_GAUGE_DATA_POINTS  = 1;
+    private static final int FN_SUM_DATA_POINTS    = 1;
+    private static final int FN_SUM_TEMPORALITY    = 2;
+    private static final int FN_SUM_IS_MONOTONIC   = 3;
+    private static final int FN_NDP_ATTRS          = 7;
+    private static final int FN_NDP_TIME_NS        = 3;
+    private static final int FN_NDP_AS_DOUBLE      = 4;
+    private static final int FN_HIST_DATA_POINTS   = 1;
+    private static final int FN_HIST_TEMPORALITY   = 2;
+    private static final int FN_HDP_ATTRS          = 9;
+    private static final int FN_HDP_TIME_NS        = 3;
+    private static final int FN_HDP_COUNT          = 4;
+    private static final int FN_HDP_SUM            = 5;
+    private static final int FN_HDP_BUCKET_COUNTS  = 6;
+    private static final int FN_HDP_EXPLICIT_BOUNDS= 7;
+    private static final int FN_HDP_EXEMPLARS      = 8;
+    private static final int FN_HDP_MIN            = 11;
+    private static final int FN_HDP_MAX            = 12;
+
+    private static final int FN_EX_FILTERED_ATTRS  = 7;
+    private static final int FN_EX_TIME_NS         = 2;
+    private static final int FN_EX_AS_DOUBLE       = 3;
+    private static final int FN_EX_SPAN_ID         = 4;
+    private static final int FN_EX_TRACE_ID        = 5;
+
+    private static final int FN_RESOURCE_METRICS   = 1;
+    private static final int FN_RM_RESOURCE        = 1;
+    private static final int FN_RM_SCOPE_METRICS   = 2;
+    private static final int FN_SM_SCOPE           = 1;
+    private static final int FN_SM_METRICS         = 2;
+    private static final int FN_SCOPE_NAME         = 1;
+    private static final int FN_SCOPE_VERSION      = 2;
+    private static final int FN_RESOURCE_ATTRS     = 1;
+
+    private static final int FN_KV_KEY    = 1;
+    private static final int FN_KV_VALUE  = 2;
+    private static final int FN_AV_STRING = 1;
+
+    private final OtlpHttpProtobufSender sender;
     private final String serviceName;
-    private final OtlpHttpSender sender;
-    private final AtomicBoolean isShutdown = new AtomicBoolean(false);
+    private final AtomicBoolean isShutdown    = new AtomicBoolean(false);
+    private final AtomicLong exportedPoints   = new AtomicLong(0);
+    private final AtomicLong droppedPoints    = new AtomicLong(0);
+    private final AtomicLong failedBatches    = new AtomicLong(0);
 
-    // 파이프라인 헬스 카운터
-    private final AtomicLong exportedPoints = new AtomicLong(0);
-    private final AtomicLong droppedPoints  = new AtomicLong(0);
-    private final AtomicLong failedBatches  = new AtomicLong(0);
-
-    // ---- 생성자 ----
-
-    /**
-     * 환경변수/시스템 프로퍼티에서 설정을 읽어 기본 인스턴스를 생성한다.
-     */
     public OtlpHttpMetricExporter() {
-        this(
-            resolveEndpoint(),
-            resolveServiceName(),
-            OtlpHttpSender.create()
-        );
+        this(resolveServiceName(), OtlpHttpProtobufSender.create());
     }
 
-    /**
-     * 테스트 또는 커스텀 설정 주입용 생성자.
-     *
-     * @param endpointBase 기본 URL (예: http://localhost:4318)
-     * @param serviceName  service.name 리소스 속성 값
-     * @param sender       공유 또는 전용 OtlpHttpSender 인스턴스
-     */
-    public OtlpHttpMetricExporter(String endpointBase, String serviceName, OtlpHttpSender sender) {
-        String base = endpointBase.endsWith(PATH)
-                ? endpointBase
-                : endpointBase.replaceAll("/+$", "") + PATH;
-        this.endpoint    = URI.create(base);
+    public OtlpHttpMetricExporter(String serviceName, OtlpHttpProtobufSender sender) {
         this.serviceName = serviceName;
         this.sender      = sender;
     }
 
-    // ---- DataExporter<MetricData> 구현 ----
-
     @Override
     public CompletableFuture<Void> export(Collection<MetricData> metrics) {
-        if (isShutdown.get() || metrics == null || metrics.isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
+        if (isShutdown.get() || metrics == null || metrics.isEmpty()) return CompletableFuture.completedFuture(null);
 
-        // 포인트 수 집계 (드롭 카운터용)
         int totalPoints = 0;
         for (MetricData m : metrics) {
-            if (m != null && m.getPoints() != null) {
-                totalPoints += m.getPoints().size();
-            }
+            if (m != null && m.getPoints() != null) totalPoints += m.getPoints().size();
         }
-        final int capturedPoints = totalPoints;
 
-        String json = toJson(metrics, serviceName);
-        final int batchSize = metrics.size();
+        try {
+            byte[] protoBytes = encodeExportRequest(metrics, serviceName);
+            SendResult result = sender.send(METRIC_PATH, protoBytes);
 
-        // sendAsync()를 사용해 Worker 스레드를 블로킹하지 않는다.
-        // 재시도 backoff 중에도 Worker는 계속 다음 배치를 처리할 수 있다.
-        return sender.sendAsync(endpoint, json)
-                .thenApply(result -> {
-                    if (result == SendResult.SUCCESS) {
-                        exportedPoints.addAndGet(capturedPoints);
-                    } else {
-                        droppedPoints.addAndGet(capturedPoints);
-                        failedBatches.incrementAndGet();
-                        AgentLogger.warn("OtlpHttpMetricExporter: 배치 전송 실패 metrics=" + batchSize
-                                + " points=" + capturedPoints
-                                + " result=" + result
-                                + " dropped_total=" + droppedPoints.get());
-                    }
-                    return (Void) null;
-                })
-                .exceptionally(ex -> {
-                    droppedPoints.addAndGet(capturedPoints);
-                    failedBatches.incrementAndGet();
-                    AgentLogger.error("OtlpHttpMetricExporter: export 예외: " + ex.getMessage());
-                    return null;
-                });
-    }
-
-    @Override
-    public CompletableFuture<Void> shutdown() {
-        if (isShutdown.compareAndSet(false, true)) {
-            AgentLogger.info("OtlpHttpMetricExporter shutdown: exported_points=" + exportedPoints.get()
-                    + " dropped_points=" + droppedPoints.get()
-                    + " failed_batches=" + failedBatches.get());
+            if (result == SendResult.SUCCESS) {
+                exportedPoints.addAndGet(totalPoints);
+            } else {
+                droppedPoints.addAndGet(totalPoints);
+                failedBatches.incrementAndGet();
+            }
+        } catch (Exception e) {
+            AgentLogger.warn("OtlpHttpMetricExporter: 인코딩 오류 — " + e.getMessage());
+            droppedPoints.addAndGet(totalPoints);
         }
         return CompletableFuture.completedFuture(null);
     }
 
-    // ---- JSON 직렬화 ----
-
-    /**
-     * MetricData 컬렉션을 OTLP ExportMetricsServiceRequest JSON으로 직렬화한다.
-     *
-     * <p>패키지-프라이빗: 단위 테스트에서 직접 검증 가능.
-     */
-    static String toJson(Collection<MetricData> metrics, String serviceName) {
-        // 예상 용량: 메트릭당 약 300B * 포인트 수
-        int estimatedSize = metrics.size() * 300 + 512;
-        StringBuilder sb = new StringBuilder(estimatedSize);
-
-        sb.append("{\"resourceMetrics\":[{\"resource\":{\"attributes\":[");
-
-        // ResourceInfo에서 동적으로 모든 속성 가져오기
-        boolean firstResAttr = true;
-        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
-            if (!firstResAttr) sb.append(",");
-            firstResAttr = false;
-            appendStringAttr(sb, entry.getKey(), entry.getValue());
-        }
-
-        // service.name이 ResourceInfo에 없을 경우를 대비해 (이미 ResourceInfo에 포함되어 있지만 보장)
-        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
-            sb.append(",");
-            appendStringAttr(sb, "service.name", serviceName);
-        }
-
-        sb.append("]},\"scopeMetrics\":[{\"scope\":{\"name\":\"javi-metric\",\"version\":\"1.0.0\"},");
-        sb.append("\"metrics\":[");
-
-        boolean firstMetric = true;
-        for (MetricData metric : metrics) {
-            if (metric == null) continue;
-            if (metric.getPoints() == null || metric.getPoints().isEmpty()) continue;
-
-            if (!firstMetric) sb.append(",");
-            firstMetric = false;
-            appendMetric(sb, metric);
-        }
-
-        sb.append("]}]}]}");
-        return sb.toString();
+    @Override
+    public CompletableFuture<Void> shutdown() {
+        isShutdown.set(true);
+        return CompletableFuture.completedFuture(null);
     }
 
-    private static void appendMetric(StringBuilder sb, MetricData metric) {
-        sb.append("{");
-        sb.append("\"name\":\"").append(escapeJson(metric.getName())).append("\",");
+    static byte[] encodeExportRequest(Collection<MetricData> metrics, String serviceName) {
+        byte[] resourceBytes = encodeResource(serviceName);
+        ByteArrayOutputStream metricsOut = new ByteArrayOutputStream(metrics.size() * 200);
+        for (MetricData metric : metrics) {
+            if (metric == null) continue;
+            ProtoEncoder.writeMessage(metricsOut, FN_SM_METRICS, encodeMetric(metric));
+        }
 
-        // description / unit
-        sb.append("\"description\":\"").append(escapeJson(metric.getDescription())).append("\",");
-        sb.append("\"unit\":\"").append(escapeJson(metric.getUnit())).append("\",");
+        ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(32);
+        ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, "javi-metric");
+        ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, "1.0.0");
 
-        // MetricType에 따라 다른 JSON 키 사용
+        ByteArrayOutputStream scopeMetricsOut = new ByteArrayOutputStream(64 + metricsOut.size());
+        ProtoEncoder.writeMessage(scopeMetricsOut, FN_SM_SCOPE, scopeOut.toByteArray());
+        byte[] mBytes = metricsOut.toByteArray();
+        scopeMetricsOut.write(mBytes, 0, mBytes.length);
+
+        ByteArrayOutputStream rmOut = new ByteArrayOutputStream(128 + scopeMetricsOut.size());
+        ProtoEncoder.writeMessage(rmOut, FN_RM_RESOURCE, resourceBytes);
+        ProtoEncoder.writeMessage(rmOut, FN_RM_SCOPE_METRICS, scopeMetricsOut.toByteArray());
+
+        ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rmOut.size() + 4);
+        ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_METRICS, rmOut.toByteArray());
+        return requestOut.toByteArray();
+    }
+
+    private static byte[] encodeResource(String serviceName) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+        }
+        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] encodeMetric(MetricData metric) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        ProtoEncoder.writeString(out, FN_METRIC_NAME, metric.getName());
+        if (metric.getDescription() != null && !metric.getDescription().isEmpty()) ProtoEncoder.writeString(out, FN_METRIC_DESCRIPTION, metric.getDescription());
+        if (metric.getUnit() != null && !metric.getUnit().isEmpty()) ProtoEncoder.writeString(out, FN_METRIC_UNIT, metric.getUnit());
+
         MetricData.MetricType type = metric.getType();
         if (type == null) type = MetricData.MetricType.GAUGE;
 
         switch (type) {
-            case GAUGE:
-                sb.append("\"gauge\":{\"dataPoints\":[");
-                appendNumberDataPoints(sb, metric.getPoints());
-                sb.append("]}");
-                break;
-
-            case SUM:
-                // SUM은 단조 증가 Counter에 대응. CUMULATIVE temporality 사용.
-                sb.append("\"sum\":{");
-                sb.append("\"aggregationTemporality\":").append(TEMPORALITY_CUMULATIVE).append(",");
-                sb.append("\"isMonotonic\":true,");
-                sb.append("\"dataPoints\":[");
-                appendNumberDataPoints(sb, metric.getPoints());
-                sb.append("]}");
-                break;
-
-            case HISTOGRAM:
-                sb.append("\"histogram\":{");
-                sb.append("\"aggregationTemporality\":").append(TEMPORALITY_CUMULATIVE).append(",");
-                sb.append("\"dataPoints\":[");
-                if (metric.getHistogramPoints() != null && !metric.getHistogramPoints().isEmpty()) {
-                    appendExplicitHistogramDataPoints(sb, metric.getHistogramPoints());
-                } else {
-                    // 하위 호환: Point.value를 sum으로 사용, count=1 처리
-                    appendHistogramDataPointsSimple(sb, metric.getPoints());
-                }
-                sb.append("]}");
-                break;
-
-            default:
-                // 알 수 없는 타입: GAUGE로 fallback
-                sb.append("\"gauge\":{\"dataPoints\":[");
-                appendNumberDataPoints(sb, metric.getPoints());
-                sb.append("]}");
-                break;
+            case GAUGE:     ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints())); break;
+            case SUM:       ProtoEncoder.writeMessage(out, FN_METRIC_SUM, encodeSum(metric.getPoints())); break;
+            case HISTOGRAM: ProtoEncoder.writeMessage(out, FN_METRIC_HISTOGRAM, encodeHistogram(metric)); break;
+            default:        ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints())); break;
         }
-
-        sb.append("}");
+        return out.toByteArray();
     }
 
-    /** GAUGE / SUM 공용 NumberDataPoint 직렬화. */
-    private static void appendNumberDataPoints(StringBuilder sb, Collection<MetricData.Point> points) {
-        boolean first = true;
-        for (MetricData.Point point : points) {
-            if (point == null) continue;
-            if (!first) sb.append(",");
-            first = false;
+    private static byte[] encodeGauge(Collection<MetricData.Point> points) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64);
+        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_GAUGE_DATA_POINTS, encodeNumberDataPoint(point));
+        return out.toByteArray();
+    }
 
-            sb.append("{");
-            appendPointAttributes(sb, point.getAttributes());
-            sb.append(",");
+    private static byte[] encodeSum(Collection<MetricData.Point> points) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64 + 8);
+        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_SUM_DATA_POINTS, encodeNumberDataPoint(point));
+        ProtoEncoder.writeVarint32(out, FN_SUM_TEMPORALITY, TEMPORALITY_CUMULATIVE);
+        ProtoEncoder.writeVarint32(out, FN_SUM_IS_MONOTONIC, 1);
+        return out.toByteArray();
+    }
 
-            // timeUnixNano: OTLP은 string (int64)
-            if (point.getTimestamp() != null) {
-                long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L
-                           + point.getTimestamp().getNano();
-                sb.append("\"timeUnixNano\":\"").append(nanos).append("\",");
-            } else {
-                sb.append("\"timeUnixNano\":\"0\",");
-            }
-
-            // OTLP NumberDataPoint: asDouble 또는 asInt
-            sb.append("\"asDouble\":").append(point.getValue());
-            sb.append("}");
+    private static byte[] encodeHistogram(MetricData metric) {
+        Collection<MetricData.HistogramPoint> hpts = metric.getHistogramPoints();
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        if (hpts != null && !hpts.isEmpty()) {
+            for (MetricData.HistogramPoint hp : hpts) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointFull(hp));
+        } else {
+            for (MetricData.Point point : metric.getPoints()) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point));
         }
+        ProtoEncoder.writeVarint32(out, FN_HIST_TEMPORALITY, TEMPORALITY_CUMULATIVE);
+        return out.toByteArray();
     }
 
-    /** ExplicitBucketHistogram 데이터 포인트 직렬화. */
-    private static void appendExplicitHistogramDataPoints(StringBuilder sb, Collection<MetricData.HistogramPoint> points) {
-        boolean first = true;
-        for (MetricData.HistogramPoint hp : points) {
-            if (hp == null) continue;
-            if (!first) sb.append(",");
-            first = false;
-
-            sb.append("{");
-            appendPointAttributes(sb, hp.getAttributes());
-            sb.append(",");
-
-            if (hp.getTimestamp() != null) {
-                long nanos = hp.getTimestamp().getEpochSecond() * 1_000_000_000L
-                           + hp.getTimestamp().getNano();
-                sb.append("\"timeUnixNano\":\"").append(nanos).append("\",");
-            } else {
-                sb.append("\"timeUnixNano\":\"0\",");
-            }
-
-            sb.append("\"count\":\"").append(hp.getCount()).append("\",");
-            sb.append("\"sum\":").append(hp.getSum()).append(",");
-            if (hp.getMin() != Double.MAX_VALUE) sb.append("\"min\":").append(hp.getMin()).append(",");
-            if (hp.getMax() != Double.MIN_VALUE) sb.append("\"max\":").append(hp.getMax()).append(",");
-
-            // explicitBounds
-            sb.append("\"explicitBounds\":[");
-            double[] bounds = hp.getBoundaries();
-            for (int i = 0; i < bounds.length; i++) {
-                if (i > 0) sb.append(",");
-                sb.append(bounds[i]);
-            }
-            sb.append("],");
-
-            // bucketCounts
-            sb.append("\"bucketCounts\":[");
-            long[] counts = hp.getBucketCounts();
-            for (int i = 0; i < counts.length; i++) {
-                if (i > 0) sb.append(",");
-                sb.append("\"").append(counts[i]).append("\"");
-            }
-            sb.append("]");
-            sb.append("}");
+    private static byte[] encodeHistogramDataPointFull(MetricData.HistogramPoint hp) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        encodePointAttributes(out, FN_HDP_ATTRS, hp.getAttributes());
+        if (hp.getTimestamp() != null) {
+            long nanos = hp.getTimestamp().getEpochSecond() * 1_000_000_000L + hp.getTimestamp().getNano();
+            ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
         }
+        ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, hp.getCount());
+        ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, hp.getSum());
+        ProtoEncoder.writePackedFixed64(out, FN_HDP_BUCKET_COUNTS, hp.getBucketCounts());
+        ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
+        if (hp.getMin() > 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MIN, hp.getMin());
+        if (hp.getMax() > 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MAX, hp.getMax());
+        return out.toByteArray();
     }
 
-    /** HistogramDataPoint 직렬화 — 단순 버전 (count=1, sum=value, 버킷 없음). */
-    private static void appendHistogramDataPointsSimple(StringBuilder sb, Collection<MetricData.Point> points) {
-        boolean first = true;
-        for (MetricData.Point point : points) {
-            if (point == null) continue;
-            if (!first) sb.append(",");
-            first = false;
-
-            sb.append("{");
-            appendPointAttributes(sb, point.getAttributes());
-            sb.append(",");
-
-            if (point.getTimestamp() != null) {
-                long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L
-                           + point.getTimestamp().getNano();
-                sb.append("\"timeUnixNano\":\"").append(nanos).append("\",");
-            } else {
-                sb.append("\"timeUnixNano\":\"0\",");
-            }
-
-            sb.append("\"count\":\"1\",");
-            sb.append("\"sum\":").append(point.getValue());
-            sb.append("}");
+    private static byte[] encodeNumberDataPoint(MetricData.Point point) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
+        encodePointAttributes(out, FN_NDP_ATTRS, point.getAttributes());
+        if (point.getTimestamp() != null) {
+            long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
+            ProtoEncoder.writeFixed64Field(out, FN_NDP_TIME_NS, nanos);
         }
+        ProtoEncoder.writeDoubleField(out, FN_NDP_AS_DOUBLE, point.getValue());
+        return out.toByteArray();
     }
 
-    private static void appendPointAttributes(StringBuilder sb, Map<String, String> attrs) {
-        sb.append("\"attributes\":[");
-        if (attrs != null && !attrs.isEmpty()) {
-            boolean first = true;
-            for (Map.Entry<String, String> entry : attrs.entrySet()) {
-                if (!first) sb.append(",");
-                first = false;
-                appendStringAttr(sb, entry.getKey(), entry.getValue());
-            }
+    private static byte[] encodeHistogramDataPointSimple(MetricData.Point point) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(80);
+        encodePointAttributes(out, FN_HDP_ATTRS, point.getAttributes());
+        if (point.getTimestamp() != null) {
+            long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
+            ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
         }
-        sb.append("]");
+        ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, 1L);
+        ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
+        return out.toByteArray();
     }
 
-    // ---- 헬퍼 ----
-
-    private static void appendStringAttr(StringBuilder sb, String key, String value) {
-        sb.append("{\"key\":\"").append(escapeJson(key))
-          .append("\",\"value\":{\"stringValue\":\"").append(escapeJson(value)).append("\"}}");
+    private static void encodePointAttributes(ByteArrayOutputStream out, int fieldNumber, Map<String, String> attrs) {
+        if (attrs == null) return;
+        for (Map.Entry<String, String> entry : attrs.entrySet()) ProtoEncoder.writeMessage(out, fieldNumber, encodeStringKV(entry.getKey(), entry.getValue()));
     }
 
-    static String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
-    // ---- 설정 읽기 ----
-
-    private static String resolveEndpoint() {
-        return OtlpHttpSender.get(
-                "JAVI_COLLECTOR_ENDPOINT", "javi.collector.endpoint",
-                "http://localhost:4318");
+    private static byte[] encodeStringKV(String key, String value) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + (value != null ? value.length() : 0) + 8);
+        ProtoEncoder.writeString(out, FN_KV_KEY, key);
+        ByteArrayOutputStream av = new ByteArrayOutputStream((value != null ? value.length() : 0) + 4);
+        ProtoEncoder.writeString(av, FN_AV_STRING, value != null ? value : "");
+        ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
+        return out.toByteArray();
     }
 
     private static String resolveServiceName() {
-        return OtlpHttpSender.get(
-                "JAVI_SERVICE_NAME", "javi.service.name",
-                "javi-service");
+        String val = System.getenv("JAVI_SERVICE_NAME");
+        return (val != null && !val.isEmpty()) ? val : System.getProperty("javi.service.name", "javi-service");
     }
 }
