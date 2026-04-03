@@ -16,6 +16,7 @@ public final class AgentConfig {
     public static final String DEFAULT_ENDPOINT = "http://localhost:4318/v1/traces";
     public static final String DEFAULT_SERVICE_NAME = "javi-service";
     public static final double DEFAULT_SAMPLE_RATE = 1.0;
+    public static final String DEFAULT_PROTOCOL = "http";
 
     // Singleton Instance
     private static final AgentConfig INSTANCE = loadInternal();

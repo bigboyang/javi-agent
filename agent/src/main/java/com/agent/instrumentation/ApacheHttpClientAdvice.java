@@ -1,7 +1,6 @@
 package com.agent.instrumentation;
 
 import com.agent.span.Span;
-import com.agent.span.SpanContext;
 import com.agent.span.SpanKind;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;

@@ -5,7 +5,7 @@ import com.agent.config.AgentConfig;
 import com.agent.config.RemoteConfigPoller;
 import com.agent.logs.AgentLogger;
 import com.agent.logs.TraceLogger;
-// import com.agent.sampler.AdaptiveSampler; // [DISABLED] Adaptive sampling → collector로 이전
+import com.agent.sampler.AdaptiveSampler;
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
 import com.agent.common.grpc.GrpcSender;
@@ -25,7 +25,6 @@ import com.agent.trace.exporter.LoggingSpanExporter;
 import com.agent.trace.exporter.OtlpGrpcSpanExporter;
 import com.agent.trace.exporter.OtlpHttpSpanExporter;
 import com.agent.trace.exporter.SpanExporter;
-// import com.agent.trace.processor.TailSamplingSpanProcessor; // [DISABLED] Tail sampling → collector로 이전
 import java.util.Arrays;
 
 /**
@@ -37,26 +36,16 @@ public final class AgentRuntime {
     private static final Tracer TRACER;
 
     static {
-        AgentConfig config = AgentConfig.get();
+        AgentConfig config = AgentConfig.load();
         String protocol = config.getExporterProtocol().toLowerCase();
 
         SpanExporter spanExporter;
         SdkLoggerProvider loggerProvider;
         SdkMeterProvider meterProvider;
 
-        // 성능 최적화: gRPC를 기본으로 사용 (JSON 직렬화 오버헤드 제거)
+        // 성능 최적화: Protobuf 기본으로 사용 (JSON 직렬화 오버헤드 제거)
         if ("http".equals(protocol)) {
-            // 명시적으로 HTTP가 설정된 경우에만 활성화
-            OtlpHttpSender sharedHttp = OtlpHttpSender.create();
-            spanExporter = buildHttpSpanExporter(config, sharedHttp);
-            loggerProvider = new SdkLoggerProvider(new OtlpHttpLogExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp));
-            meterProvider = new SdkMeterProvider(
-                    CompositeMetricExporter.of(
-                            new FileMetricExporter(),
-                            new OtlpHttpMetricExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp)));
-            AgentLogger.info("프로토콜: HTTP (JSON) endpoint=" + config.getExporterEndpoint());
-        } else {
-            // 기본값: gRPC (Protobuf)
+            // 기본값: (http)
             GrpcSender sharedGrpc = GrpcSender.create(config.getGrpcEndpoint(), 10_000L);
             spanExporter = buildGrpcSpanExporter(config, sharedGrpc);
             loggerProvider = new SdkLoggerProvider(new OtlpGrpcLogExporter(config.getServiceName(), sharedGrpc));
@@ -64,31 +53,31 @@ public final class AgentRuntime {
                     CompositeMetricExporter.of(
                             new FileMetricExporter(),
                             new OtlpGrpcMetricExporter(config.getServiceName(), sharedGrpc)));
-            AgentLogger.info("프로토콜: OTLP/HTTP Protobuf endpoint=" + config.getGrpcEndpoint());
+            AgentLogger.info("프로토콜: gRPC (Protobuf) endpoint=" + config.getGrpcEndpoint());
+        } else {
+            // TODO : gRPC 전송 방식 구현 (현재 http로 설정되어 있음, 변경 필요)
+            OtlpHttpSender sharedHttp = OtlpHttpSender.create();
+            spanExporter = buildHttpSpanExporter(config, sharedHttp);
+            loggerProvider = new SdkLoggerProvider(new OtlpHttpLogExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp));
+            meterProvider = new SdkMeterProvider(
+                    CompositeMetricExporter.of(
+                            new FileMetricExporter(),
+                            new OtlpHttpMetricExporter(config.getExporterEndpoint(), config.getServiceName(), sharedHttp)));
+            AgentLogger.info("프로토콜: HTTP (Protobuf) endpoint=" + config.getExporterEndpoint());
         }
 
-        // [DISABLED] Adaptive/Tail Sampling은 collector에서 처리
-        // Fix 1: ParentBased — 항상 ParentBasedSampler로 감싸서 원격 부모의 sampled 결정을 존중
-        Sampler sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
-        // AdaptiveSampler adaptiveSampler = null;
-        // if (config.getTargetSps() > 0) {
-        //     adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
-        //     sampler = Sampler.parentBased(adaptiveSampler);
-        //     AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + "), wrapped in ParentBasedSampler");
-        // } else {
-        //     sampler = Sampler.parentBased(Sampler.traceIdRatioBased(config.getSampleRate()));
-        // }
+        Sampler sampler;
+        AdaptiveSampler adaptiveSampler = null;
+        if (config.getTargetSps() > 0) {
+            adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
+            sampler = adaptiveSampler;
+            AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + ")");
+        } else {
+            sampler = Sampler.traceIdRatioBased(config.getSampleRate());
+        }
 
         PROVIDER = new SdkTracerProvider(IdGenerator.random());
         PROVIDER.setSampler(sampler);
-
-        // [DISABLED] Tail Sampling → collector에서 처리
-        // if (config.isTailSamplingEnabled()) {
-        //     PROVIDER.addSpanProcessor(new TailSamplingSpanProcessor(spanExporter, config));
-        //     AgentLogger.info("[TailSamplingSpanProcessor] Enabled (TTL=" + config.getTailSamplingTtlMs() + "ms)");
-        // } else {
-        //     PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
-        // }
         PROVIDER.addBatchSpanProcessor(spanExporter, 2048, 512, 5000);
 
         // JaviSdk 초기화 (Trace + Log + Metric 통합 관리)
@@ -101,15 +90,13 @@ public final class AgentRuntime {
 
         // 원격 설정 폴러 시작 (대시보드 pull 방식)
         RemoteConfigPoller poller = RemoteConfigPoller.startIfConfigured(PROVIDER);
-        // [DISABLED] AdaptiveSampler 연동 → collector로 이전
-        // if (poller != null && adaptiveSampler != null) {
-        //     poller.setAdaptiveSampler(adaptiveSampler);
-        // }
+        if (poller != null && adaptiveSampler != null) {
+            poller.setAdaptiveSampler(adaptiveSampler);
+        }
 
         AgentLogger.info("service=" + config.getServiceName()
                 + " sampleRate=" + config.getSampleRate());
         AgentLogger.info("trace 로그 파일: " + TraceLogger.logFilePath());
-        AgentLogger.info(com.agent.logs.LogSampler.INSTANCE.describe());
     }
 
     private AgentRuntime() {}
