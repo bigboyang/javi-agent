@@ -26,14 +26,24 @@ public final class CompositeSpanProcessor implements SpanProcessor {
     @Override
     public void onStart(Span span) {
         for (SpanProcessor processor : processors) {
-            processor.onStart(span);
+            try {
+                processor.onStart(span);
+            } catch (Throwable t) {
+                com.agent.logs.AgentLogger.error("[CompositeSpanProcessor] onStart error in "
+                        + processor.getClass().getSimpleName() + ": " + t.getMessage());
+            }
         }
     }
 
     @Override
     public void onEnd(Span span) {
         for (SpanProcessor processor : processors) {
-            processor.onEnd(span);
+            try {
+                processor.onEnd(span);
+            } catch (Throwable t) {
+                com.agent.logs.AgentLogger.error("[CompositeSpanProcessor] onEnd error in "
+                        + processor.getClass().getSimpleName() + ": " + t.getMessage());
+            }
         }
     }
 

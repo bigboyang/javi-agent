@@ -3,6 +3,9 @@ package com.agent.trace.processor;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.config.AgentConfig;
 import com.agent.logs.AgentLogger;
+import com.agent.metric.Counter;
+import com.agent.metric.Gauge;
+import com.agent.metric.MetricRegistry;
 import com.agent.span.ReadableSpan;
 import com.agent.span.Span;
 import com.agent.span.SpanId;
@@ -54,7 +57,20 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
     private final BlockingQueue<List<Span>> exportQueue = new ArrayBlockingQueue<>(EXPORT_QUEUE_SIZE);
     private final AtomicBoolean shutdown = new AtomicBoolean(false);
     private final Thread exportWorker;
+
+    /** TTL 만료 처리 전용 스케줄러 (10초 주기). */
     private final ScheduledExecutorService ttlCleaner;
+    /**
+     * Grace period 타이머 전용 스케줄러.
+     * ttlCleaner와 분리하여 TTL 주기 작업이 grace period(100ms) 타이머를 지연시키지 않도록 한다.
+     */
+    private final ScheduledExecutorService graceScheduler;
+
+    // ---- 메트릭 ----
+    private final Gauge   pendingTracesGauge;
+    private final Counter exportedTracesCounter;
+    private final Counter droppedTracesCounter;
+    private final Counter ttlEvictedCounter;
 
     public TailSamplingSpanProcessor(SpanExporter exporter, AgentConfig config) {
         this.exporter = exporter;
@@ -62,6 +78,13 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
         this.slowThresholdNanos = TimeUnit.MILLISECONDS.toNanos(config.getSlowThresholdMs());
         this.criticalUrls = Collections.unmodifiableSet(new java.util.HashSet<>(config.getCriticalUrls()));
         this.maxPendingTraces = config.getTailSamplingMaxPendingTraces();
+
+        // 메트릭 등록
+        MetricRegistry reg = MetricRegistry.get();
+        this.pendingTracesGauge    = reg.gauge("javi.tail.pending.traces",    Collections.emptyMap());
+        this.exportedTracesCounter = reg.counter("javi.tail.traces.exported", Collections.emptyMap());
+        this.droppedTracesCounter  = reg.counter("javi.tail.traces.dropped",  Collections.emptyMap());
+        this.ttlEvictedCounter     = reg.counter("javi.tail.traces.ttl_evicted", Collections.emptyMap());
 
         this.exportWorker = new Thread(this::exportLoop, "javi-tail-export");
         this.exportWorker.setDaemon(true);
@@ -73,6 +96,12 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             return t;
         });
         this.ttlCleaner.scheduleAtFixedRate(this::evictStaleTraces, 10, 10, TimeUnit.SECONDS);
+
+        this.graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "javi-tail-grace-scheduler");
+            t.setDaemon(true);
+            return t;
+        });
 
         AgentLogger.info("[TailSamplingSpanProcessor] 시작 (TTL=" + ttlMs + "ms, maxPending=" + maxPendingTraces + ")");
     }
@@ -122,9 +151,20 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             return;
         }
 
+        // 이미 결정된 traceId 확인 — computeIfAbsent 전에 먼저 확인하여
+        // decided 버퍼가 GC 전 새로 생성되는 메모리 누수를 방지한다.
+        TraceBuffer existing = pending.get(traceId);
+        if (existing != null && existing.decided.get()) {
+            if (span.getContext().getTraceFlags().isSampled()) {
+                AgentLogger.debug("[TailSampling] 결정 후 늦게 도착한 스팬 직접 export: traceId=" + traceId);
+                scheduleExport(Collections.singletonList(span));
+            }
+            return;
+        }
+
         TraceBuffer buf = pending.computeIfAbsent(traceId, k -> new TraceBuffer());
 
-        // 이미 결정된 트레이스에 늦게 도착한 스팬: head-sampled이면 직접 export
+        // computeIfAbsent 후 재확인 (race: 다른 스레드가 결정했을 수 있음)
         if (buf.decided.get()) {
             if (span.getContext().getTraceFlags().isSampled()) {
                 AgentLogger.debug("[TailSampling] 결정 후 늦게 도착한 스팬 직접 export: traceId=" + traceId);
@@ -138,7 +178,6 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
         // 로컬 루트 감지:
         //   1. parentSpanId 없음 → 절대 루트
         //   2. parentSpanId가 로컬 spanId 집합에 없음 → 원격 부모(분산 트레이싱 진입점)
-        // 두 경우 모두 이 JVM 내에서 트레이스 결정을 내려야 하는 로컬 루트임.
         String parentSpanId = span.getContext().getParentSpanId();
         boolean isLocalRoot = !SpanId.isValid(parentSpanId)
                 || !buf.localSpanIds.contains(parentSpanId);
@@ -146,8 +185,8 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
         if (isLocalRoot && buf.decideScheduled.compareAndSet(false, true)) {
             AgentLogger.debug("[TailSampling] 로컬 루트 감지 (remoteParent=" + SpanId.isValid(parentSpanId)
                     + "), grace=" + ROOT_GRACE_PERIOD_MS + "ms: traceId=" + traceId);
-            // Grace period: in-flight 자식 스팬들이 도착할 시간을 허용
-            ttlCleaner.schedule(() -> decide(traceId, buf), ROOT_GRACE_PERIOD_MS, TimeUnit.MILLISECONDS);
+            // graceScheduler를 사용하여 TTL 주기 작업의 간섭 없이 타이머 실행
+            graceScheduler.schedule(() -> decide(traceId, buf), ROOT_GRACE_PERIOD_MS, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -156,9 +195,17 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             return;
         }
         pending.remove(traceId);
+        pendingTracesGauge.set(pending.size());
+
+        // 결정 후 localSpanIds 메모리 해제
+        buf.localSpanIds.clear();
+
         List<Span> snapshot = buf.snapshot();
         if (shouldExport(snapshot)) {
             scheduleExport(snapshot);
+            exportedTracesCounter.increment();
+        } else {
+            droppedTracesCounter.increment();
         }
     }
 
@@ -220,7 +267,9 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             if (now - buf.createdMs > ttlMs) {
                 if (buf.decided.compareAndSet(false, true)) {
                     pending.remove(entry.getKey());
-                    // TTL 만료: head-sampled 스팬만 export (안전한 fallback)
+                    pendingTracesGauge.set(pending.size());
+                    buf.localSpanIds.clear();
+
                     List<Span> snapshot = buf.snapshot();
                     List<Span> sampled = new ArrayList<>();
                     for (Span s : snapshot) {
@@ -232,6 +281,7 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
                         AgentLogger.debug("[TailSampling] TTL 만료 트레이스 export: " + sampled.size() + " spans");
                         scheduleExport(sampled);
                     }
+                    ttlEvictedCounter.increment();
                 }
             }
         }
@@ -244,7 +294,6 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
     }
 
     private void exportLoop() {
-        // 루프 밖에 선언하여 매 사이클마다 재사용 (clear()는 내부 배열 유지)
         List<List<Span>> batches = new ArrayList<>(64);
         List<Span> toExport = new ArrayList<>(512);
         while (!shutdown.get()) {
@@ -254,9 +303,8 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
                     continue;
                 }
                 batches.add(first);
-                exportQueue.drainTo(batches, 63); // max 64 traces per export call
+                exportQueue.drainTo(batches, 63);
 
-                // Flatten and export — 기존 리스트 재사용
                 for (List<Span> batch : batches) {
                     toExport.addAll(batch);
                 }
@@ -274,11 +322,23 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
                 break;
             }
         }
+
+        // shutdown 후 큐에 남은 항목 처리 (shutdown()에서 interrupt 전에 scheduleExport 완료 보장)
+        exportQueue.drainTo(batches);
+        for (List<Span> batch : batches) {
+            toExport.addAll(batch);
+        }
+        if (!toExport.isEmpty()) {
+            try {
+                exporter.export(toExport);
+            } catch (Throwable t) {
+                AgentLogger.error("[TailSampling] shutdown 드레인 export 오류: " + t.getMessage());
+            }
+        }
     }
 
     @Override
     public CompletableResultCode forceFlush() {
-        // TTL 만료 트레이스 강제 처리
         evictStaleTraces();
         return exporter.flush();
     }
@@ -289,10 +349,13 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             return CompletableResultCode.ofSuccess();
         }
         ttlCleaner.shutdownNow();
-        // 남은 pending 트레이스 처리
+        graceScheduler.shutdownNow();
+
+        // pending 트레이스를 먼저 모두 처리하여 exportQueue에 적재
         for (Map.Entry<String, TraceBuffer> entry : pending.entrySet()) {
             TraceBuffer buf = entry.getValue();
             if (buf.decided.compareAndSet(false, true)) {
+                buf.localSpanIds.clear();
                 List<Span> snapshot = buf.snapshot();
                 if (shouldExport(snapshot)) {
                     scheduleExport(snapshot);
@@ -300,6 +363,8 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
             }
         }
         pending.clear();
+
+        // exportQueue 적재 완료 후 Worker 중단 — exportLoop의 드레인 처리가 나머지를 처리
         exportWorker.interrupt();
         try {
             exportWorker.join(3000);
@@ -314,7 +379,8 @@ public final class TailSamplingSpanProcessor implements SpanProcessor {
      *
      * <ul>
      *   <li>{@code spans}: export 후보 스팬 목록 (lock-free)</li>
-     *   <li>{@code localSpanIds}: 이 JVM에서 생성된 spanId 집합 — 로컬 루트 판별에 사용</li>
+     *   <li>{@code localSpanIds}: 이 JVM에서 생성된 spanId 집합 — 로컬 루트 판별에 사용.
+     *       {@code decide()} 호출 후 {@code clear()}하여 메모리를 해제한다.</li>
      *   <li>{@code decideScheduled}: decide() 중복 스케줄 방지 플래그</li>
      *   <li>{@code decided}: decide() 실행 여부 플래그 (CAS)</li>
      * </ul>

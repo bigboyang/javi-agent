@@ -12,6 +12,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -30,6 +32,8 @@ public final class BatchSpanProcessor implements SpanProcessor {
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
     private final java.util.concurrent.atomic.AtomicLong droppedSpans  = new java.util.concurrent.atomic.AtomicLong(0);
     private final java.util.concurrent.atomic.AtomicLong exportedSpans = new java.util.concurrent.atomic.AtomicLong(0);
+    /** forceFlush() 요청을 Worker에 전달하기 위한 신호 큐. */
+    private final LinkedBlockingQueue<CountDownLatch> flushRequests = new LinkedBlockingQueue<>();
 
     // ---- Backpressure 메트릭 ----
     private final Gauge   queueSizeGauge;
@@ -108,9 +112,23 @@ public final class BatchSpanProcessor implements SpanProcessor {
         queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
     }
 
+    /**
+     * Worker 스레드에 flush 신호를 보내고, Worker가 완료할 때까지 대기한다.
+     * 직접 큐를 드레인하지 않으므로 Worker와의 레이스 컨디션이 없다.
+     */
     @Override
     public CompletableResultCode forceFlush() {
-        flush();
+        if (isShutdown.get()) {
+            return CompletableResultCode.ofSuccess();
+        }
+        CountDownLatch latch = new CountDownLatch(1);
+        flushRequests.offer(latch);
+        workerThread.interrupt(); // blocking poll에서 깨운다
+        try {
+            latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         return CompletableResultCode.ofSuccess();
     }
 
@@ -119,10 +137,12 @@ public final class BatchSpanProcessor implements SpanProcessor {
         if (!isShutdown.compareAndSet(false, true)) {
             return CompletableResultCode.ofSuccess();
         }
+        // Worker가 마지막 flush를 완료하도록 신호 후 중단
+        CountDownLatch latch = new CountDownLatch(1);
+        flushRequests.offer(latch);
         workerThread.interrupt();
         try {
-            // 종료 전 잔여 데이터 전송
-            flush();
+            latch.await(3, TimeUnit.SECONDS);
             workerThread.join(2000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -135,6 +155,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
 
     /**
      * 현재 큐에 쌓인 모든 스팬을 즉시 내보낸다.
+     * Worker 스레드에서만 호출해야 한다 (forceFlush 신호 처리 시 포함).
      * 오류 발생 시에도 나머지 배치 처리를 계속한다.
      */
     private void flush() {
@@ -144,10 +165,11 @@ public final class BatchSpanProcessor implements SpanProcessor {
             try {
                 exporter.export(batch);
                 exportedSpans.addAndGet(drained);
+                exportedCounter.add(drained);
             } catch (Throwable t) {
                 AgentLogger.error("[BatchSpanProcessor] Flush error: " + t.getMessage());
-                // break 대신 계속 처리 — 이 배치를 포기하고 다음 배치 시도
                 droppedSpans.addAndGet(drained);
+                droppedCounter.add(drained);
             } finally {
                 batch.clear();
             }
@@ -160,6 +182,9 @@ public final class BatchSpanProcessor implements SpanProcessor {
             List<Span> batch = new ArrayList<>(maxBatchSize);
             while (!isShutdown.get()) {
                 try {
+                    // forceFlush() 신호 처리 — interrupt로 깨어난 경우에도 확인
+                    drainFlushRequests(batch);
+
                     Span firstItem = queue.poll(exportIntervalMs, TimeUnit.MILLISECONDS);
                     if (firstItem != null) {
                         batch.add(firstItem);
@@ -176,18 +201,33 @@ public final class BatchSpanProcessor implements SpanProcessor {
                             droppedCounter.add(batchSize);
                         } finally {
                             batch.clear();
-                            // 큐 상태 메트릭 갱신 (워커 루프마다 1회)
                             int qs = queue.size();
                             queueSizeGauge.set(qs);
                             queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
                         }
                     }
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
+                    // forceFlush() 신호로 깨어난 경우 처리 후 루프 계속
+                    drainFlushRequests(batch);
+                    if (isShutdown.get()) {
+                        break;
+                    }
+                    // isShutdown이 아직 false면 루프 유지 (interrupt 플래그 클리어됨)
                 } catch (Throwable t) {
                     AgentLogger.error("[BatchSpanProcessor] Worker error: " + t.getMessage());
                     batch.clear();
+                }
+            }
+        }
+
+        /** 대기 중인 모든 flushRequest를 처리하고 latch를 카운트다운한다. */
+        private void drainFlushRequests(List<Span> batch) {
+            CountDownLatch latch;
+            while ((latch = flushRequests.poll()) != null) {
+                try {
+                    flush();
+                } finally {
+                    latch.countDown();
                 }
             }
         }

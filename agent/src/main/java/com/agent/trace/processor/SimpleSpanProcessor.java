@@ -26,6 +26,12 @@ public final class SimpleSpanProcessor implements SpanProcessor {
         if (span == null) {
             return;
         }
+        if (com.agent.config.RemoteConfigHolder.get().isEmergencyOff()) {
+            return;
+        }
+        if (!span.getContext().getTraceFlags().isSampled()) {
+            return;
+        }
         exporter.export(Collections.singletonList(span));
     }
 
