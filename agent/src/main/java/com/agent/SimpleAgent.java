@@ -30,6 +30,7 @@ import com.agent.logs.AgentLogger;
 import com.agent.logs.AppLogCollector;
 import com.agent.metric.HikariMetricsCollector;
 import com.agent.metric.JvmMetricsCollector;
+import com.agent.metric.K8sMetricsCollector;
 import com.agent.metric.TomcatMetricsCollector;
 import com.agent.profiling.ProfilingScheduler;
 import java.io.File;
@@ -133,6 +134,7 @@ public class SimpleAgent {
         JvmMetricsCollector.start();
         HikariMetricsCollector.start();
         TomcatMetricsCollector.start();
+        K8sMetricsCollector.start();  // GAP-08 확장: cgroup 기반 Pod 리소스 메트릭
 
         // Continuous Profiling (GAP-07): 30초 주기 CPU 샘플링 → javi-collector 전송
         ProfilingScheduler.start();
@@ -146,6 +148,7 @@ public class SimpleAgent {
                 JvmMetricsCollector.stop();
                 HikariMetricsCollector.stop();
                 TomcatMetricsCollector.stop();
+                K8sMetricsCollector.stop();
                 ProfilingScheduler.stop();
                 AgentRuntime.provider().forceFlush().join(5, TimeUnit.SECONDS);
                 AgentRuntime.provider().shutdown().join(3, TimeUnit.SECONDS);

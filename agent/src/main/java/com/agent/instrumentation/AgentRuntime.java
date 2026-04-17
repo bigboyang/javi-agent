@@ -29,7 +29,6 @@ import java.util.Arrays;
  */
 public final class AgentRuntime {
     private static final SdkTracerProvider PROVIDER;
-    private static final Tracer TRACER;
 
     static {
         AgentConfig config = AgentConfig.load();
@@ -67,8 +66,6 @@ public final class AgentRuntime {
         // JaviSdk 초기화 (Trace + Log + Metric 통합 관리)
         JaviSdk.initialize(PROVIDER, loggerProvider, meterProvider);
 
-        TRACER = PROVIDER.getTracer("agent-auto");
-
         // MDC service 이름을 TraceLogger에 주입
         TraceLogger.setServiceName(config.getServiceName());
 
@@ -84,11 +81,6 @@ public final class AgentRuntime {
     }
 
     private AgentRuntime() {}
-
-    /** 기본 agent-auto 스코프 Tracer를 반환한다. */
-    public static Tracer tracer() {
-        return TRACER;
-    }
 
     /**
      * 지정한 instrumentationName 스코프의 Tracer를 반환한다.

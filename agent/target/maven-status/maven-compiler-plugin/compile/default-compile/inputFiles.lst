@@ -7,6 +7,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcStatementAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/AgentRuntime.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/MapTextMapSetter.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/K8sMetricsCollector.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/RedisLettuceAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/FileMetricExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/HttpServletAdvice.java
