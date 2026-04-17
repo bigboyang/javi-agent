@@ -4,7 +4,6 @@ import com.agent.common.ResourceInfo;
 import com.agent.config.AgentConfig;
 import com.agent.logs.AgentLogger;
 
-import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;

@@ -15,12 +15,6 @@ import java.util.Map;
  */
 public final class SdkLogEmitter {
 
-    private static volatile String serviceName = "javi-service";
-
-    public static void setServiceName(String name) {
-        serviceName = name;
-    }
-
     /**
      * 로그 이벤트를 캡처하여 파이프라인에 넣는다.
      *
