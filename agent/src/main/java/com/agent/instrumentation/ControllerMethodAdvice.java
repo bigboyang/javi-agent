@@ -276,6 +276,7 @@ public final class ControllerMethodAdvice {
                         }
                     } catch (Throwable ignored) {}
 
+                    // span
                     // 스팬 이름: route 템플릿 우선, 없으면 raw URI
                     spanName = httpMethod + " " + (route != null ? route : uri);
 
@@ -388,6 +389,7 @@ public final class ControllerMethodAdvice {
                 state.span.recordException(error);
                 state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             }
+            // metric만 기록
             recordHttpMetrics(state, error);
             return;
         }

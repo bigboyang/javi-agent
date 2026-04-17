@@ -165,26 +165,46 @@ public final class ResourceInfo {
     }
 
     private static void detectKubernetes(Map<String, String> m) {
-        // Pod Name
+        // Pod Name — OTel: k8s.pod.name
         String podName = System.getenv("K8S_POD_NAME");
         if (podName != null && !podName.isEmpty()) {
             m.put("k8s.pod.name", podName);
         }
 
-        // Namespace
+        // Pod UID — OTel: k8s.pod.uid (Downward API: metadata.uid)
+        String podUid = System.getenv("K8S_POD_UID");
+        if (podUid != null && !podUid.isEmpty()) {
+            m.put("k8s.pod.uid", podUid);
+        }
+
+        // Namespace — OTel 표준명: k8s.namespace.name (k8s.namespace는 비표준)
         String namespace = System.getenv("K8S_NAMESPACE");
         if (namespace == null || namespace.isEmpty()) {
             // Fallback: ServiceAccount 파일에서 읽기
             namespace = readFileContents("/var/run/secrets/kubernetes.io/serviceaccount/namespace");
         }
         if (namespace != null && !namespace.isEmpty()) {
-            m.put("k8s.namespace", namespace.trim());
+            m.put("k8s.namespace.name", namespace.trim());
         }
 
-        // Node Name
+        // Node Name — OTel: k8s.node.name (Downward API: spec.nodeName)
         String nodeName = System.getenv("K8S_NODE_NAME");
         if (nodeName != null && !nodeName.isEmpty()) {
             m.put("k8s.node.name", nodeName);
+        }
+
+        // Deployment Name — Infra Metrics Correlation JOIN 키
+        // Downward API 미지원 → 환경변수로 직접 주입 필요
+        // e.g. valueFrom.fieldRef.fieldPath: metadata.labels['app']
+        String deploymentName = System.getenv("K8S_DEPLOYMENT_NAME");
+        if (deploymentName != null && !deploymentName.isEmpty()) {
+            m.put("k8s.deployment.name", deploymentName);
+        }
+
+        // ReplicaSet Name — OTel: k8s.replicaset.name
+        String replicaSetName = System.getenv("K8S_REPLICASET_NAME");
+        if (replicaSetName != null && !replicaSetName.isEmpty()) {
+            m.put("k8s.replicaset.name", replicaSetName);
         }
     }
 

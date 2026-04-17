@@ -22,6 +22,7 @@ import com.agent.instrumentation.RedisLettuceAdvice;
 import com.agent.instrumentation.SpringAsyncAdvice;
 import com.agent.instrumentation.WebFluxHandlerAdvice;
 import com.agent.instrumentation.GrpcClientAdvice;
+import com.agent.instrumentation.GrpcServerAdvice;
 import com.agent.instrumentation.MongoDbAdvice;
 import com.agent.instrumentation.ElasticsearchAdvice;
 import com.agent.instrumentation.ScheduledTaskAdvice;
@@ -30,6 +31,7 @@ import com.agent.logs.AppLogCollector;
 import com.agent.metric.HikariMetricsCollector;
 import com.agent.metric.JvmMetricsCollector;
 import com.agent.metric.TomcatMetricsCollector;
+import com.agent.profiling.ProfilingScheduler;
 import java.io.File;
 import java.io.IOException;
 import java.lang.instrument.Instrumentation;
@@ -112,6 +114,7 @@ public class SimpleAgent {
         // 신규 계측
         installWebFluxInstrumentation(inst, agentBuilder);
         installGrpcClientInstrumentation(inst, agentBuilder);
+        installGrpcServerInstrumentation(inst, agentBuilder);
         installMongoDbInstrumentation(inst, agentBuilder);
         installElasticsearchInstrumentation(inst, agentBuilder);
         installScheduledTaskInstrumentation(inst, agentBuilder);
@@ -131,6 +134,9 @@ public class SimpleAgent {
         HikariMetricsCollector.start();
         TomcatMetricsCollector.start();
 
+        // Continuous Profiling (GAP-07): 30초 주기 CPU 샘플링 → javi-collector 전송
+        ProfilingScheduler.start();
+
         AgentLogger.info("모든 계측이 등록되었습니다.");
         AgentLogger.info("이제 애플리케이션이 시작됩니다...");
 
@@ -140,6 +146,7 @@ public class SimpleAgent {
                 JvmMetricsCollector.stop();
                 HikariMetricsCollector.stop();
                 TomcatMetricsCollector.stop();
+                ProfilingScheduler.stop();
                 AgentRuntime.provider().forceFlush().join(5, TimeUnit.SECONDS);
                 AgentRuntime.provider().shutdown().join(3, TimeUnit.SECONDS);
             } catch (Exception e) {
@@ -501,6 +508,31 @@ public class SimpleAgent {
                                 .on(named("start").and(takesArguments(2)))))
                 .installOn(inst);
         AgentLogger.info("gRPC Client 계측 등록 완료 (ClientCallImpl.start)");
+    }
+
+    /**
+     * gRPC 서버 계측.
+     *
+     * <p>ServerCalls 내부 ServerCall.Listener 구현체의 {@code onHalfClose()}를 계측한다.
+     * onHalfClose는 클라이언트 요청이 완전히 수신되어 서버 핸들러가 실행되는 시점이다.
+     *
+     * <ul>
+     *   <li>Unary RPC: onHalfClose에서 handler 실행 → 응답 전송 → 완료 (동기 기준 전 구간 캡처)</li>
+     *   <li>Streaming RPC: onHalfClose에서 최종 메시지 수신 후 응답 처리 시작점 캡처</li>
+     * </ul>
+     *
+     * <p>traceparent는 gRPC Metadata(listener.headers)에서 추출하며
+     * GrpcClientAdvice가 주입한 분산 추적 컨텍스트를 복원한다.
+     */
+    private static void installGrpcServerInstrumentation(Instrumentation inst, AgentBuilder agentBuilder) {
+        agentBuilder
+                .type(nameContains("ServerCalls$")
+                        .and(hasSuperType(named("io.grpc.ServerCall$Listener"))))
+                .transform((builder, type, classLoader, module, protectionDomain) ->
+                        builder.visit(Advice.to(GrpcServerAdvice.class)
+                                .on(named("onHalfClose").and(takesNoArguments()))))
+                .installOn(inst);
+        AgentLogger.info("gRPC Server 계측 등록 완료 (ServerCalls Listener.onHalfClose)");
     }
 
     /**
