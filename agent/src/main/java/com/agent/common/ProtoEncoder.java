@@ -18,6 +18,7 @@ public final class ProtoEncoder {
     public static final int WIRE_VARINT = 0;
     public static final int WIRE_64BIT  = 1;
     public static final int WIRE_LEN    = 2;
+    public static final int WIRE_32BIT  = 5;
 
     private ProtoEncoder() {}
 
@@ -104,6 +105,16 @@ public final class ProtoEncoder {
         if (value == 0) return;
         writeTag(out, fieldNumber, WIRE_VARINT);
         writeRawVarint32(out, value);
+    }
+
+    /** fixed32 (span flags 등) 필드. */
+    public static void writeFixed32Field(ByteArrayOutputStream out, int fieldNumber, int value) {
+        if (value == 0) return;
+        writeTag(out, fieldNumber, WIRE_32BIT);
+        out.write( value        & 0xFF);
+        out.write((value >>  8) & 0xFF);
+        out.write((value >> 16) & 0xFF);
+        out.write((value >> 24) & 0xFF);
     }
 
     /** fixed64 (타임스탬프 나노초) 필드. */

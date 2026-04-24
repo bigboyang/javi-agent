@@ -145,7 +145,8 @@ public final class OtlpHttpProtobufSender {
         if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
         if (attempt >= MAX_ATTEMPTS) { onSendFailure(path); resultFuture.complete(SendResult.FAILURE); return; }
 
-        long delayMs = RETRY_BACKOFF_MS[attempt];
+        long jitter = attempt > 0 ? (long) (Math.random() * 500L) : 0L;
+        long delayMs = RETRY_BACKOFF_MS[attempt] + jitter;
         retryScheduler.schedule(() -> {
             if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
             

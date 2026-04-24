@@ -34,11 +34,13 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_SUM_TEMPORALITY    = 2;
     private static final int FN_SUM_IS_MONOTONIC   = 3;
     private static final int FN_NDP_ATTRS          = 7;
+    private static final int FN_NDP_START_TIME_NS  = 2;
     private static final int FN_NDP_TIME_NS        = 3;
     private static final int FN_NDP_AS_DOUBLE      = 4;
     private static final int FN_HIST_DATA_POINTS   = 1;
     private static final int FN_HIST_TEMPORALITY   = 2;
     private static final int FN_HDP_ATTRS          = 9;
+    private static final int FN_HDP_START_TIME_NS  = 2;
     private static final int FN_HDP_TIME_NS        = 3;
     private static final int FN_HDP_COUNT          = 4;
     private static final int FN_HDP_SUM            = 5;
@@ -66,6 +68,11 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_KV_KEY    = 1;
     private static final int FN_KV_VALUE  = 2;
     private static final int FN_AV_STRING = 1;
+
+    private static final long PROCESS_START_NS;
+    static {
+        PROCESS_START_NS = java.lang.management.ManagementFactory.getRuntimeMXBean().getStartTime() * 1_000_000L;
+    }
 
     private final OtlpHttpProtobufSender sender;
     private final String serviceName;
@@ -172,13 +179,13 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
 
     private static byte[] encodeGauge(Collection<MetricData.Point> points) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64);
-        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_GAUGE_DATA_POINTS, encodeNumberDataPoint(point));
+        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_GAUGE_DATA_POINTS, encodeNumberDataPoint(point, 0L));
         return out.toByteArray();
     }
 
     private static byte[] encodeSum(Collection<MetricData.Point> points) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64 + 8);
-        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_SUM_DATA_POINTS, encodeNumberDataPoint(point));
+        for (MetricData.Point point : points) ProtoEncoder.writeMessage(out, FN_SUM_DATA_POINTS, encodeNumberDataPoint(point, PROCESS_START_NS));
         ProtoEncoder.writeVarint32(out, FN_SUM_TEMPORALITY, TEMPORALITY_CUMULATIVE);
         ProtoEncoder.writeVarint32(out, FN_SUM_IS_MONOTONIC, 1);
         return out.toByteArray();
@@ -188,17 +195,18 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         Collection<MetricData.HistogramPoint> hpts = metric.getHistogramPoints();
         ByteArrayOutputStream out = new ByteArrayOutputStream(256);
         if (hpts != null && !hpts.isEmpty()) {
-            for (MetricData.HistogramPoint hp : hpts) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointFull(hp));
+            for (MetricData.HistogramPoint hp : hpts) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointFull(hp, PROCESS_START_NS));
         } else {
-            for (MetricData.Point point : metric.getPoints()) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point));
+            for (MetricData.Point point : metric.getPoints()) ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point, PROCESS_START_NS));
         }
         ProtoEncoder.writeVarint32(out, FN_HIST_TEMPORALITY, TEMPORALITY_CUMULATIVE);
         return out.toByteArray();
     }
 
-    private static byte[] encodeHistogramDataPointFull(MetricData.HistogramPoint hp) {
+    private static byte[] encodeHistogramDataPointFull(MetricData.HistogramPoint hp, long startTimeNs) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(256);
         encodePointAttributes(out, FN_HDP_ATTRS, hp.getAttributes());
+        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
         if (hp.getTimestamp() != null) {
             long nanos = hp.getTimestamp().getEpochSecond() * 1_000_000_000L + hp.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
@@ -212,9 +220,10 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         return out.toByteArray();
     }
 
-    private static byte[] encodeNumberDataPoint(MetricData.Point point) {
+    private static byte[] encodeNumberDataPoint(MetricData.Point point, long startTimeNs) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(64);
         encodePointAttributes(out, FN_NDP_ATTRS, point.getAttributes());
+        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_NDP_START_TIME_NS, startTimeNs);
         if (point.getTimestamp() != null) {
             long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_NDP_TIME_NS, nanos);
@@ -223,9 +232,10 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         return out.toByteArray();
     }
 
-    private static byte[] encodeHistogramDataPointSimple(MetricData.Point point) {
+    private static byte[] encodeHistogramDataPointSimple(MetricData.Point point, long startTimeNs) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(80);
         encodePointAttributes(out, FN_HDP_ATTRS, point.getAttributes());
+        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
         if (point.getTimestamp() != null) {
             long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
             ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);

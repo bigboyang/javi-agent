@@ -37,6 +37,7 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     // ---- Span proto field numbers ----
     private static final int FN_SPAN_TRACE_ID      = 1;
     private static final int FN_SPAN_SPAN_ID       = 2;
+    private static final int FN_SPAN_TRACE_STATE   = 3;
     private static final int FN_SPAN_PARENT_ID     = 4;
     private static final int FN_SPAN_NAME          = 5;
     private static final int FN_SPAN_KIND          = 6;
@@ -48,6 +49,7 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     private static final int FN_SPAN_DROPPED_EVTS  = 12;
     private static final int FN_SPAN_LINKS         = 13;
     private static final int FN_SPAN_STATUS        = 15;
+    private static final int FN_SPAN_FLAGS         = 16;
 
     private static final int FN_STATUS_MESSAGE = 2;
     private static final int FN_STATUS_CODE    = 3;
@@ -198,6 +200,9 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
         if (traceId != null) ProtoEncoder.writeBytes(out, FN_SPAN_TRACE_ID, traceId);
         if (spanId  != null) ProtoEncoder.writeBytes(out, FN_SPAN_SPAN_ID,  spanId);
 
+        String traceState = ctx.getTraceState().getValue();
+        if (traceState != null && !traceState.isEmpty()) ProtoEncoder.writeString(out, FN_SPAN_TRACE_STATE, traceState);
+
         byte[] parentId = ProtoEncoder.hexToBytes(ctx.getParentSpanId());
         if (parentId != null) ProtoEncoder.writeBytes(out, FN_SPAN_PARENT_ID, parentId);
 
@@ -223,9 +228,18 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
                 ProtoEncoder.writeMessage(out, FN_SPAN_EVENTS, encodeEvent(event));
             }
         }
-        
+
+        if (rs.getLinks() != null) {
+            for (SpanLink link : rs.getLinks()) {
+                if (link != null) ProtoEncoder.writeMessage(out, FN_SPAN_LINKS, encodeLink(link));
+            }
+        }
+
         byte[] statusBytes = encodeStatus(rs.getStatus(), rs.getStatusDescription());
         if (statusBytes.length > 0) ProtoEncoder.writeMessage(out, FN_SPAN_STATUS, statusBytes);
+
+        int flags = ctx.getTraceFlags().asByte() & 0xFF;
+        if (flags != 0) ProtoEncoder.writeFixed32Field(out, FN_SPAN_FLAGS, flags);
 
         return out.toByteArray();
     }
@@ -238,6 +252,26 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
             for (Map.Entry<AttributeKey<?>, Object> e : event.getAttributes().entrySet()) {
                 byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
                 if (kv != null) ProtoEncoder.writeMessage(out, FN_EVENT_ATTRS, kv);
+            }
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] encodeLink(SpanLink link) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
+        SpanContext lCtx = link.getSpanContext();
+        if (lCtx != null) {
+            byte[] ltid = ProtoEncoder.hexToBytes(lCtx.getTraceId());
+            byte[] lsid = ProtoEncoder.hexToBytes(lCtx.getSpanId());
+            if (ltid != null) ProtoEncoder.writeBytes(out, FN_LINK_TRACE_ID, ltid);
+            if (lsid != null) ProtoEncoder.writeBytes(out, FN_LINK_SPAN_ID,  lsid);
+            String lts = lCtx.getTraceState().getValue();
+            if (lts != null && !lts.isEmpty()) ProtoEncoder.writeString(out, 3, lts);
+        }
+        if (link.getAttributes() != null) {
+            for (Map.Entry<AttributeKey<?>, Object> e : link.getAttributes().entrySet()) {
+                byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
+                if (kv != null) ProtoEncoder.writeMessage(out, FN_LINK_ATTRS, kv);
             }
         }
         return out.toByteArray();

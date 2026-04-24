@@ -128,11 +128,18 @@ public final class PrometheusMetricExporter implements DataExporter<MetricData> 
         StringBuilder sb = new StringBuilder(metrics.size() * 256);
 
         for (MetricData metric : metrics) {
-            if (metric == null || metric.getPoints() == null || metric.getPoints().isEmpty()) continue;
+            if (metric == null) continue;
 
             String metricName = sanitizeName(metric.getName());
             MetricData.MetricType type = metric.getType() != null
                     ? metric.getType() : MetricData.MetricType.GAUGE;
+
+            if (type == MetricData.MetricType.HISTOGRAM) {
+                appendHistogram(sb, metricName, metric);
+                continue;
+            }
+
+            if (metric.getPoints() == null || metric.getPoints().isEmpty()) continue;
 
             // SUM(Counter)은 Prometheus 관례상 _total suffix
             String exposedName = (type == MetricData.MetricType.SUM)
@@ -156,6 +163,71 @@ public final class PrometheusMetricExporter implements DataExporter<MetricData> 
         }
 
         return sb.toString();
+    }
+
+    private static void appendHistogram(StringBuilder sb, String metricName, MetricData metric) {
+        java.util.Collection<MetricData.HistogramPoint> hpts = metric.getHistogramPoints();
+        if (hpts == null || hpts.isEmpty()) return;
+
+        sb.append("# TYPE ").append(metricName).append(" histogram\n");
+        for (MetricData.HistogramPoint hp : hpts) {
+            if (hp == null) continue;
+            Map<String, String> attrs = hp.getAttributes();
+            long cumulative = 0;
+            double[] bounds = hp.getBoundaries();
+            long[]   counts = hp.getBucketCounts();
+
+            // per-bucket → cumulative counts
+            if (bounds != null && counts != null) {
+                for (int i = 0; i < bounds.length && i < counts.length; i++) {
+                    cumulative += counts[i];
+                    sb.append(metricName).append("_bucket");
+                    appendLabelsWithExtra(sb, attrs, "le", formatValue(bounds[i]));
+                    sb.append(" ").append(cumulative);
+                    appendTimestamp(sb, hp.getTimestamp());
+                    sb.append("\n");
+                }
+            }
+            // +Inf bucket (last element of counts)
+            cumulative = hp.getCount();
+            sb.append(metricName).append("_bucket");
+            appendLabelsWithExtra(sb, attrs, "le", "+Inf");
+            sb.append(" ").append(cumulative);
+            appendTimestamp(sb, hp.getTimestamp());
+            sb.append("\n");
+
+            sb.append(metricName).append("_sum");
+            appendLabels(sb, attrs);
+            sb.append(" ").append(formatValue(hp.getSum()));
+            appendTimestamp(sb, hp.getTimestamp());
+            sb.append("\n");
+
+            sb.append(metricName).append("_count");
+            appendLabels(sb, attrs);
+            sb.append(" ").append(hp.getCount());
+            appendTimestamp(sb, hp.getTimestamp());
+            sb.append("\n");
+        }
+    }
+
+    private static void appendLabelsWithExtra(StringBuilder sb, Map<String, String> attrs, String extraKey, String extraVal) {
+        sb.append("{");
+        boolean first = true;
+        if (attrs != null) {
+            for (Map.Entry<String, String> e : attrs.entrySet()) {
+                if (!first) sb.append(",");
+                first = false;
+                sb.append(sanitizeName(e.getKey())).append("=\"").append(escapeLabelValue(e.getValue())).append("\"");
+            }
+        }
+        if (!first) sb.append(",");
+        sb.append(sanitizeName(extraKey)).append("=\"").append(escapeLabelValue(extraVal)).append("\"");
+        sb.append("}");
+    }
+
+    private static void appendTimestamp(StringBuilder sb, java.time.Instant ts) {
+        if (ts == null) return;
+        sb.append(" ").append(ts.getEpochSecond() * 1000L + ts.getNano() / 1_000_000L);
     }
 
     private static void appendLabels(StringBuilder sb, Map<String, String> attrs) {
@@ -194,11 +266,7 @@ public final class PrometheusMetricExporter implements DataExporter<MetricData> 
     }
 
     private static String promType(MetricData.MetricType type) {
-        switch (type) {
-            case SUM:       return "counter";
-            case HISTOGRAM: return "gauge";  // histogram은 분해된 gauge로 노출
-            default:        return "gauge";
-        }
+        return type == MetricData.MetricType.SUM ? "counter" : "gauge";
     }
 
     private static int resolvePort() {
