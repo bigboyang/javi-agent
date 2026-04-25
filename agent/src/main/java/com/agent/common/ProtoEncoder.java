@@ -107,6 +107,13 @@ public final class ProtoEncoder {
         writeRawVarint32(out, value);
     }
 
+    /** uint64 (varint-encoded) 필드. OTel histogram count 등 uint64 타입에 사용. */
+    public static void writeUint64Field(ByteArrayOutputStream out, int fieldNumber, long value) {
+        if (value == 0L) return;
+        writeTag(out, fieldNumber, WIRE_VARINT);
+        writeRawVarint64(out, value);
+    }
+
     /** fixed32 (span flags 등) 필드. */
     public static void writeFixed32Field(ByteArrayOutputStream out, int fieldNumber, int value) {
         if (value == 0) return;
