@@ -33,6 +33,7 @@ class SdkSpanTest {
                 scopeInfo,
                 anchoredClock.now(),
                 Collections.emptyList(),
+                0,
                 new SpanLimits(3, 3, 3),
                 SpanKind.INTERNAL,
                 NoopSpanProcessor.getInstance(),

@@ -48,6 +48,7 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     private static final int FN_SPAN_EVENTS        = 11;
     private static final int FN_SPAN_DROPPED_EVTS  = 12;
     private static final int FN_SPAN_LINKS         = 13;
+    private static final int FN_SPAN_DROPPED_LINKS = 14;
     private static final int FN_SPAN_STATUS        = 15;
     private static final int FN_SPAN_FLAGS         = 16;
 
@@ -91,12 +92,6 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     public OtlpHttpSpanExporter(String serviceName, OtlpHttpProtobufSender sender) {
         this.serviceName = serviceName;
         this.sender      = sender;
-    }
-
-    // AgentRuntime에서 사용할 수 있도록 endpoint 받는 생성자 추가
-    public OtlpHttpSpanExporter(String endpoint, String serviceName, OtlpHttpProtobufSender sender) {
-        this.serviceName = serviceName;
-        this.sender = sender;
     }
 
     @Override
@@ -234,6 +229,9 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
                 if (link != null) ProtoEncoder.writeMessage(out, FN_SPAN_LINKS, encodeLink(link));
             }
         }
+
+        int droppedLinks = rs.getDroppedLinksCount();
+        if (droppedLinks > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_LINKS, droppedLinks);
 
         byte[] statusBytes = encodeStatus(rs.getStatus(), rs.getStatusDescription());
         if (statusBytes.length > 0) ProtoEncoder.writeMessage(out, FN_SPAN_STATUS, statusBytes);

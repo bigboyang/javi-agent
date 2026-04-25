@@ -26,4 +26,5 @@ public interface ReadableSpan {
     List<SpanLink> getLinks();
     int getDroppedAttributeCount();
     int getDroppedEventCount();
+    int getDroppedLinksCount();
 }

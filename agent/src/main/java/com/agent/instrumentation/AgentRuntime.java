@@ -110,7 +110,7 @@ public final class AgentRuntime {
     private static SpanExporter buildSpanExporter(AgentConfig config, OtlpHttpProtobufSender sender) {
         LoggingSpanExporter loggingExporter = new LoggingSpanExporter();
         try {
-            SpanExporter otlpExporter = new OtlpHttpSpanExporter(config.getExporterEndpoint(), config.getServiceName(), sender);
+            SpanExporter otlpExporter = new OtlpHttpSpanExporter(config.getServiceName(), sender);
             return CompositeSpanExporter.create(Arrays.asList(loggingExporter, otlpExporter));
         } catch (Exception e) {
             AgentLogger.warn("OTLP HTTP Protobuf exporter 초기화 실패, 콘솔로 fallback: " + e.getMessage());

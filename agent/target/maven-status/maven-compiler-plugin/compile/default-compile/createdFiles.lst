@@ -79,7 +79,6 @@ com/agent/instrumentation/WebFluxHandlerAdvice.class
 com/agent/logs/OtlpHttpLogExporter.class
 com/agent/metric/MetricData$HistogramPoint.class
 com/agent/propagation/ContextPropagators.class
-com/agent/metric/PrometheusMetricExporter$1.class
 com/agent/logs/LogBatchProcessor$Worker.class
 com/agent/propagation/NoopTextMapPropagator.class
 com/agent/trace/TracerProvider.class

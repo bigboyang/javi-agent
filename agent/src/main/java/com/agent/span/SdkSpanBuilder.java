@@ -22,6 +22,7 @@ public final class SdkSpanBuilder implements SpanBuilder {
     private final boolean tracerEnabled;
     private SpanContext parent;
     private final List<SpanLink> links = new ArrayList<>();
+    private int droppedLinksCount = 0;
     private SpanKind spanKind = SpanKind.INTERNAL;
     private long startTimestampNanos;
     private final Clock clock;
@@ -64,6 +65,7 @@ public final class SdkSpanBuilder implements SpanBuilder {
         }
         if (links.size() >= sharedState.getSpanLimits().getMaxLinks()) {
             sharedState.getSpanLimits().recordDroppedLink();
+            droppedLinksCount++;
             return this;
         }
         links.add(new SpanLink(spanContext, attributes));
@@ -145,6 +147,7 @@ public final class SdkSpanBuilder implements SpanBuilder {
                 instrumentationScopeInfo,
                 start,
                 links,
+                droppedLinksCount,
                 sharedState.getSpanLimits(),
                 spanKind,
                 sharedState.getSpanProcessor(),

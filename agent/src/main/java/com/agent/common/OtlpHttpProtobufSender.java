@@ -3,30 +3,24 @@ package com.agent.common;
 import com.agent.logs.AgentLogger;
 import com.agent.metric.MetricRegistry;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManagerFactory;
 
 /**
  * OTLP/HTTP Protobuf 전송을 담당하는 공통 Transport.
@@ -37,7 +31,7 @@ import javax.net.ssl.TrustManagerFactory;
  *   <li>Protobuf 인코딩 유지 — JSON 오버헤드 없음</li>
  *   <li>Content-Type: application/x-protobuf (OTLP/HTTP 표준)</li>
  *   <li>비동기 재시도: sendAsync() + ScheduledExecutorService</li>
- *   <li>Circuit Breaker 및 TLS/mTLS 지원</li>
+ *   <li>Circuit Breaker 패턴 내장</li>
  * </ul>
  */
 public final class OtlpHttpProtobufSender {
@@ -60,6 +54,7 @@ public final class OtlpHttpProtobufSender {
 
     private final String baseEndpoint;
     private final long   timeoutMs;
+    private final ExecutorService httpExecutor;
     private final HttpClient httpClient;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
     private final Map<String, String> extraHeaders;
@@ -84,23 +79,13 @@ public final class OtlpHttpProtobufSender {
         };
 
         this.retryScheduler = Executors.newSingleThreadScheduledExecutor(retryDaemon);
+        this.httpExecutor = Executors.newFixedThreadPool(2, httpDaemon);
 
-        HttpClient.Builder clientBuilder = HttpClient.newBuilder()
+        this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(5))
-                .executor(Executors.newFixedThreadPool(2, httpDaemon));
-
-        boolean tlsEnabled = this.baseEndpoint.startsWith("https://")
-                || Boolean.parseBoolean(env("JAVI_TLS_ENABLED", "false"));
-        if (tlsEnabled) {
-            try {
-                clientBuilder.sslContext(buildSslContext());
-                AgentLogger.info("OtlpHttpProtobufSender: TLS/mTLS 활성화");
-            } catch (Exception e) {
-                AgentLogger.warn("OtlpHttpProtobufSender: TLS 설정 실패 — " + e.getMessage());
-            }
-        }
-        this.httpClient = clientBuilder.build();
+                .executor(this.httpExecutor)
+                .build();
     }
 
     public static OtlpHttpProtobufSender create() {
@@ -191,8 +176,11 @@ public final class OtlpHttpProtobufSender {
     }
 
     private void onSendFailure(String path) {
-        if (cbState.compareAndSet(CbState.HALF_OPEN, CbState.OPEN) ||
-            (cbFailures.incrementAndGet() >= CB_FAILURE_THRESHOLD && cbState.compareAndSet(CbState.CLOSED, CbState.OPEN))) {
+        if (cbState.compareAndSet(CbState.HALF_OPEN, CbState.OPEN)) {
+            cbOpenedAtMs = System.currentTimeMillis();
+            cbFailures.set(0);
+        } else if (cbFailures.incrementAndGet() >= CB_FAILURE_THRESHOLD &&
+                   cbState.compareAndSet(CbState.CLOSED, CbState.OPEN)) {
             cbOpenedAtMs = System.currentTimeMillis();
             cbFailures.set(0);
         }
@@ -209,6 +197,7 @@ public final class OtlpHttpProtobufSender {
     public void shutdown() {
         isShutdown.set(true);
         retryScheduler.shutdown();
+        httpExecutor.shutdown();
     }
 
     private static Map<String, String> parseHeaders() {
@@ -240,11 +229,6 @@ public final class OtlpHttpProtobufSender {
         } catch (Exception e) { return data; }
     }
 
-    private static SSLContext buildSslContext() throws Exception {
-        // ... (TLS logic remains the same)
-        return SSLContext.getDefault();
-    }
-
     public static String resolveEndpoint() {
         String val = System.getenv(ENV_ENDPOINT);
         return (val != null && !val.isEmpty()) ? val : System.getProperty(PROP_ENDPOINT, DEFAULT_ENDPOINT);
@@ -256,8 +240,4 @@ public final class OtlpHttpProtobufSender {
         } catch (Exception e) { return 10_000L; }
     }
 
-    private static String env(String key, String defaultVal) {
-        String val = System.getenv(key);
-        return (val != null && !val.isEmpty()) ? val : defaultVal;
-    }
 }

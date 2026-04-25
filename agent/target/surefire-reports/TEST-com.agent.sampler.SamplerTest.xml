@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.agent.sampler.SamplerTest" time="0.004" tests="9" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.agent.sampler.SamplerTest" time="0.005" tests="9" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="24"/>
     <property name="sun.jnu.encoding" value="UTF-8"/>
@@ -13,7 +13,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="KR"/>
     <property name="sun.boot.library.path" value="/opt/homebrew/Cellar/openjdk/24.0.2/libexec/openjdk.jdk/Contents/Home/lib"/>
-    <property name="sun.java.command" value="/Users/kkc/APM/agent/target/surefire/surefirebooter-20260403143910250_3.jar /Users/kkc/APM/agent/target/surefire 2026-04-03T14-39-10_182-jvmRun1 surefire-20260403143910250_1tmp surefire_0-20260403143910250_2tmp"/>
+    <property name="sun.java.command" value="/Users/kkc/APM/agent/target/surefire/surefirebooter-20260425200440403_3.jar /Users/kkc/APM/agent/target/surefire 2026-04-25T20-04-40_361-jvmRun1 surefire-20260425200440403_1tmp surefire_0-20260425200440403_2tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="/Users/kkc/APM/agent/target/test-classes:/Users/kkc/APM/agent/target/classes:/Users/kkc/.m2/repository/org/junit/jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar:/Users/kkc/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.10.2/junit-jupiter-api-5.10.2.jar:/Users/kkc/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/kkc/.m2/repository/org/junit/platform/junit-platform-commons/1.10.2/junit-platform-commons-1.10.2.jar:/Users/kkc/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/kkc/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.10.2/junit-jupiter-params-5.10.2.jar:/Users/kkc/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.10.2/junit-jupiter-engine-5.10.2.jar:/Users/kkc/.m2/repository/org/junit/platform/junit-platform-engine/1.10.2/junit-platform-engine-1.10.2.jar:/Users/kkc/.m2/repository/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar:/Users/kkc/.m2/repository/net/bytebuddy/byte-buddy/1.14.12/byte-buddy-1.14.12.jar:/Users/kkc/.m2/repository/net/bytebuddy/byte-buddy-agent/1.14.12/byte-buddy-agent-1.14.12.jar:/Users/kkc/.m2/repository/org/slf4j/slf4j-api/1.7.36/slf4j-api-1.7.36.jar:/Users/kkc/.m2/repository/ch/qos/logback/logback-classic/1.2.11/logback-classic-1.2.11.jar:/Users/kkc/.m2/repository/ch/qos/logback/logback-core/1.2.11/logback-core-1.2.11.jar:/Users/kkc/.m2/repository/org/apache/logging/log4j/log4j-core/2.20.0/log4j-core-2.20.0.jar:/Users/kkc/.m2/repository/org/apache/logging/log4j/log4j-api/2.20.0/log4j-api-2.20.0.jar:/Users/kkc/.m2/repository/org/apache/httpcomponents/httpclient/4.5.13/httpclient-4.5.13.jar:/Users/kkc/.m2/repository/org/apache/httpcomponents/httpcore/4.4.13/httpcore-4.4.13.jar:/Users/kkc/.m2/repository/commons-logging/commons-logging/1.2/commons-logging-1.2.jar:/Users/kkc/.m2/repository/commons-codec/commons-codec/1.11/commons-codec-1.11.jar:/Users/kkc/.m2/repository/org/apache/kafka/kafka-clients/3.4.0/kafka-clients-3.4.0.jar:/Users/kkc/.m2/repository/com/github/luben/zstd-jni/1.5.2-1/zstd-jni-1.5.2-1.jar:/Users/kkc/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar:/Users/kkc/.m2/repository/org/xerial/snappy/snappy-java/1.1.8.4/snappy-java-1.1.8.4.jar:/Users/kkc/.m2/repository/io/lettuce/lettuce-core/6.2.3.RELEASE/lettuce-core-6.2.3.RELEASE.jar:/Users/kkc/.m2/repository/io/netty/netty-common/4.1.89.Final/netty-common-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-handler/4.1.89.Final/netty-handler-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-resolver/4.1.89.Final/netty-resolver-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-buffer/4.1.89.Final/netty-buffer-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.89.Final/netty-transport-native-unix-common-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-codec/4.1.89.Final/netty-codec-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/netty/netty-transport/4.1.89.Final/netty-transport-4.1.89.Final.jar:/Users/kkc/.m2/repository/io/projectreactor/reactor-core/3.4.27/reactor-core-3.4.27.jar:/Users/kkc/.m2/repository/org/reactivestreams/reactive-streams/1.0.4/reactive-streams-1.0.4.jar:/Users/kkc/.m2/repository/org/springframework/amqp/spring-amqp/3.1.0/spring-amqp-3.1.0.jar:/Users/kkc/.m2/repository/org/springframework/spring-core/6.1.0/spring-core-6.1.0.jar:/Users/kkc/.m2/repository/org/springframework/spring-jcl/6.1.0/spring-jcl-6.1.0.jar:/Users/kkc/.m2/repository/org/springframework/retry/spring-retry/2.0.4/spring-retry-2.0.4.jar:"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -29,7 +29,7 @@
     <property name="java.specification.name" value="Java Platform API Specification"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="apple.awt.application.name" value="ForkedBooter"/>
-    <property name="surefire.real.class.path" value="/Users/kkc/APM/agent/target/surefire/surefirebooter-20260403143910250_3.jar"/>
+    <property name="surefire.real.class.path" value="/Users/kkc/APM/agent/target/surefire/surefirebooter-20260425200440403_3.jar"/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="24.0.2"/>
     <property name="user.name" value="kkc"/>
@@ -58,11 +58,11 @@
   </properties>
   <testcase name="parentBasedNoParentDelegatesToRoot" classname="com.agent.sampler.SamplerTest" time="0.001"/>
   <testcase name="parentBasedSampledParentPropagatesSample" classname="com.agent.sampler.SamplerTest" time="0.0"/>
-  <testcase name="ratio0PercentAlwaysDrops" classname="com.agent.sampler.SamplerTest" time="0.001"/>
-  <testcase name="samplingDecisionHasAllThreeValues" classname="com.agent.sampler.SamplerTest" time="0.0"/>
+  <testcase name="ratio0PercentAlwaysDrops" classname="com.agent.sampler.SamplerTest" time="0.0"/>
+  <testcase name="samplingDecisionHasAllThreeValues" classname="com.agent.sampler.SamplerTest" time="0.001"/>
   <testcase name="alwaysOnAlwaysSamples" classname="com.agent.sampler.SamplerTest" time="0.0"/>
   <testcase name="parentBasedInvalidParentDelegatesToRoot" classname="com.agent.sampler.SamplerTest" time="0.0"/>
   <testcase name="alwaysOffAlwaysDrops" classname="com.agent.sampler.SamplerTest" time="0.0"/>
   <testcase name="parentBasedNotSampledParentDrops" classname="com.agent.sampler.SamplerTest" time="0.0"/>
-  <testcase name="ratio100PercentAlwaysSamples" classname="com.agent.sampler.SamplerTest" time="0.0"/>
+  <testcase name="ratio100PercentAlwaysSamples" classname="com.agent.sampler.SamplerTest" time="0.001"/>
 </testsuite>

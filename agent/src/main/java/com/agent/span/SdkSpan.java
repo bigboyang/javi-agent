@@ -60,6 +60,7 @@ final class SdkSpan implements Span, ReadableSpan {
     // AtomicInteger: 락 없이 안전하게 증가/읽기 가능
     private final AtomicInteger droppedAttributeCount = new AtomicInteger(0);
     private final AtomicInteger droppedEventCount = new AtomicInteger(0);
+    private final int droppedLinksCount;
 
     private volatile long endTimeNanos;
     private long endNanoTime;
@@ -70,6 +71,7 @@ final class SdkSpan implements Span, ReadableSpan {
             InstrumentationScopeInfo instrumentationScopeInfo,
             long startTimeNanos,
             List<SpanLink> links,
+            int droppedLinksCount,
             SpanLimits spanLimits,
             SpanKind spanKind,
             SpanProcessor spanProcessor,
@@ -81,6 +83,7 @@ final class SdkSpan implements Span, ReadableSpan {
         this.instrumentationScopeInfo = instrumentationScopeInfo;
         this.startTimeNanos = startTimeNanos;
         this.links = links == null ? Collections.emptyList() : new ArrayList<>(links);
+        this.droppedLinksCount = droppedLinksCount;
         this.spanLimits = spanLimits;
         this.spanKind = spanKind;
         this.spanProcessor = spanProcessor;
@@ -301,6 +304,11 @@ final class SdkSpan implements Span, ReadableSpan {
     @Override
     public int getDroppedEventCount() {
         return droppedEventCount.get(); // AtomicInteger — 락 불필요
+    }
+
+    @Override
+    public int getDroppedLinksCount() {
+        return droppedLinksCount;
     }
 
     AnchoredClock getAnchoredClock() {

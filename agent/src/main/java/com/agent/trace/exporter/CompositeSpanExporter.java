@@ -5,9 +5,22 @@ import com.agent.span.Span;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
 
-/** Exports spans to multiple exporters in order. */
+/** Exports spans to multiple exporters concurrently. */
 public final class CompositeSpanExporter implements SpanExporter {
+
+    private static final ExecutorService DISPATCH_EXECUTOR = new ThreadPoolExecutor(
+            2, Math.max(4, Runtime.getRuntime().availableProcessors()),
+            60L, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(512),
+            r -> { Thread t = new Thread(r, "javi-composite-export"); t.setDaemon(true); return t; },
+            new ThreadPoolExecutor.CallerRunsPolicy());
+
     private final List<SpanExporter> exporters;
 
     private CompositeSpanExporter(List<SpanExporter> exporters) {
@@ -32,7 +45,16 @@ public final class CompositeSpanExporter implements SpanExporter {
                 results.add(CompletableResultCode.ofFailure());
                 continue;
             }
-            results.add(exporter.export(spans));
+            CompletableResultCode result = new CompletableResultCode();
+            results.add(result);
+            CompletableFuture.supplyAsync(() -> exporter.export(spans), DISPATCH_EXECUTOR)
+                    .whenComplete((code, ex) -> {
+                        if (ex != null) { result.fail(); return; }
+                        code.toCompletableFuture().whenComplete((v, t) -> {
+                            if (t != null || !code.isSuccess()) result.fail();
+                            else result.succeed();
+                        });
+                    });
         }
         return CompletableResultCode.ofAll(results);
     }
