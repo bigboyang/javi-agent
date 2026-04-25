@@ -123,7 +123,6 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/MetricLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/GrpcServerAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/concurrent/ContextPropagatingCallable.java
-/Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/TailSamplingSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanStatus.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/generator/IdGenerator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SpanId.java

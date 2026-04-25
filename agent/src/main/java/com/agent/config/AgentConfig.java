@@ -18,28 +18,21 @@ public final class AgentConfig {
     private final String exporterEndpoint;
     private final String serviceName;
     private final double sampleRate;
-    private final boolean tailSamplingEnabled;
     private final long slowThresholdMs;
     private final List<String> criticalUrls;
     private final int clusterMinSamples;
     private final long targetSps;
-    private final long tailSamplingTtlMs;
-    private final int tailSamplingMaxPendingTraces;
 
     private AgentConfig(String exporterEndpoint, String serviceName, double sampleRate,
-                        boolean tailSamplingEnabled, long slowThresholdMs,
-                        List<String> criticalUrls, int clusterMinSamples, long targetSps,
-                        long tailTtlMs, int tailMaxPending) {
+                        long slowThresholdMs, List<String> criticalUrls,
+                        int clusterMinSamples, long targetSps) {
         this.exporterEndpoint = exporterEndpoint;
         this.serviceName = serviceName;
         this.sampleRate = sampleRate;
-        this.tailSamplingEnabled = tailSamplingEnabled;
         this.slowThresholdMs = slowThresholdMs;
         this.criticalUrls = criticalUrls;
         this.clusterMinSamples = clusterMinSamples;
         this.targetSps = targetSps;
-        this.tailSamplingTtlMs = tailTtlMs;
-        this.tailSamplingMaxPendingTraces = tailMaxPending;
     }
 
     public static AgentConfig get() { return INSTANCE; }
@@ -50,7 +43,6 @@ public final class AgentConfig {
         String service = read("JAVI_SERVICE_NAME", "javi.service.name", DEFAULT_SERVICE_NAME);
         double rate = parseDouble(read("JAVI_SAMPLE_RATE", "javi.sample.rate", String.valueOf(DEFAULT_SAMPLE_RATE)));
 
-        boolean tailEnabled = Boolean.parseBoolean(read("JAVI_TAIL_SAMPLING_ENABLED", "javi.tail.sampling.enabled", "true"));
         long slowThreshold = parseLong(read("JAVI_SLOW_THRESHOLD_MS", "javi.slow.threshold.ms", "500"));
 
         String urlsRaw = read("JAVI_CRITICAL_URLS", "javi.critical.urls", "");
@@ -62,13 +54,9 @@ public final class AgentConfig {
         int minSamples = Integer.parseInt(read("JAVI_CLUSTER_MIN_SAMPLES", "javi.cluster.min.samples", "5"));
         long targetSps = parseLong(read("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
 
-        long tailTtlMs = parseLong(read("JAVI_TAIL_SAMPLING_TTL_MS", "javi.tail.sampling.ttl.ms", "30000"));
-        int tailMaxPending = Integer.parseInt(read("JAVI_TAIL_SAMPLING_MAX_PENDING", "javi.tail.sampling.max.pending", "10000"));
-
         com.agent.logs.AgentLogger.info("[AgentConfig] OTLP/HTTP Protobuf 전송 설정 로드됨: endpoint=" + endpoint + ", service=" + service);
         
-        return new AgentConfig(endpoint, service, rate, tailEnabled, slowThreshold, urls, minSamples,
-                targetSps, tailTtlMs, tailMaxPending);
+        return new AgentConfig(endpoint, service, rate, slowThreshold, urls, minSamples, targetSps);
     }
 
     public long getTargetSps() { return targetSps; }
@@ -77,10 +65,7 @@ public final class AgentConfig {
     public String getExporterEndpoint() { return exporterEndpoint; }
     public String getServiceName() { return serviceName; }
     public double getSampleRate() { return sampleRate; }
-    public boolean isTailSamplingEnabled() { return tailSamplingEnabled; }
     public long getSlowThresholdMs() { return slowThresholdMs; }
-    public long getTailSamplingTtlMs() { return tailSamplingTtlMs; }
-    public int getTailSamplingMaxPendingTraces() { return tailSamplingMaxPendingTraces; }
 
     private static String read(String envKey, String propKey, String defaultValue) {
         String val = System.getenv(envKey);

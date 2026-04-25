@@ -21,13 +21,15 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
     private static final String LOG_PATH = "/v1/logs";
 
     // ---- LogRecord proto field numbers ----
-    private static final int FN_LOG_TIME_NS       = 1;
-    private static final int FN_LOG_SEVERITY_NUM  = 2;
-    private static final int FN_LOG_SEVERITY_TEXT = 3;
-    private static final int FN_LOG_BODY          = 5;
-    private static final int FN_LOG_ATTRS         = 6;
-    private static final int FN_LOG_TRACE_ID      = 9;
-    private static final int FN_LOG_SPAN_ID       = 10;
+    private static final int FN_LOG_TIME_NS            = 1;
+    private static final int FN_LOG_SEVERITY_NUM       = 2;
+    private static final int FN_LOG_SEVERITY_TEXT      = 3;
+    private static final int FN_LOG_BODY               = 5;
+    private static final int FN_LOG_ATTRS              = 6;
+    private static final int FN_LOG_FLAGS              = 8;   // fixed32: W3C trace-flags
+    private static final int FN_LOG_TRACE_ID           = 9;
+    private static final int FN_LOG_SPAN_ID            = 10;
+    private static final int FN_LOG_OBSERVED_TIME_NS   = 11;  // fixed64: when agent observed the log
 
     private static final int FN_RESOURCE_LOGS = 1;
     private static final int FN_RL_RESOURCE   = 1;
@@ -123,10 +125,16 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
 
     private static byte[] encodeLogRecord(LogRecord log) {
         ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        long timeNs = 0;
         if (log.getTimestamp() != null) {
-            long nanos = log.getTimestamp().getEpochSecond() * 1_000_000_000L + log.getTimestamp().getNano();
-            ProtoEncoder.writeFixed64Field(out, FN_LOG_TIME_NS, nanos);
+            timeNs = log.getTimestamp().getEpochSecond() * 1_000_000_000L + log.getTimestamp().getNano();
+            ProtoEncoder.writeFixed64Field(out, FN_LOG_TIME_NS, timeNs);
         }
+        // observed_time_unix_nano: when the agent intercepted/observed the log.
+        // In our inline instrumentation, observation time == emission time.
+        long observedNs = timeNs > 0 ? timeNs : System.currentTimeMillis() * 1_000_000L;
+        ProtoEncoder.writeFixed64Field(out, FN_LOG_OBSERVED_TIME_NS, observedNs);
+
         String sev = log.getSeverity() != null ? log.getSeverity().toUpperCase() : "UNSPECIFIED";
         int severityNum = severityToNumber(sev);
         if (severityNum != 0) ProtoEncoder.writeVarint32(out, FN_LOG_SEVERITY_NUM, severityNum);
@@ -147,6 +155,9 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
 
         byte[] traceId = ProtoEncoder.hexToBytes(log.getTraceId());
         byte[] spanId  = ProtoEncoder.hexToBytes(log.getSpanId());
+        // flags (field 8): W3C trace-flags as fixed32. Set SAMPLED bit (0x01) when trace context is
+        // present — signals to backends that the associated trace was sampled and is available.
+        if (traceId != null) ProtoEncoder.writeFixed32Field(out, FN_LOG_FLAGS, 0x01);
         if (traceId != null) ProtoEncoder.writeBytes(out, FN_LOG_TRACE_ID, traceId);
         if (spanId  != null) ProtoEncoder.writeBytes(out, FN_LOG_SPAN_ID,  spanId);
 

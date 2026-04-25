@@ -239,9 +239,6 @@ public final class RemoteConfigPoller {
             if (metrics != null) b.metrics(metrics);
 
             // 콤마 구분 집합/목록
-            String tailPolicyRaw = extractString(json, "tailPolicy");
-            if (tailPolicyRaw != null) b.tailPolicy(parseSet(tailPolicyRaw));
-
             String spanDropRaw = extractString(json, "spanDrop");
             if (spanDropRaw != null) b.spanDrop(parseSet(spanDropRaw));
 

@@ -18,9 +18,6 @@ public final class RemoteConfig {
     /** Head Sampling Rate (0.0 ~ 1.0). 0 = all drop, 1.0 = all sample */
     private final double headSampleRate;
 
-    /** Tail Sampling 활성 정책 집합 (error / slow / critical_url / cluster) */
-    private final Set<String> tailPolicy;
-
     /** 서비스별 가중치. weight > 1.0 → 더 많이 샘플, < 1.0 → 더 적게 샘플 */
     private final Map<String, Double> serviceWeight;
 
@@ -61,14 +58,13 @@ public final class RemoteConfig {
     private final int retryCount;
 
     private RemoteConfig(
-            double headSampleRate, Set<String> tailPolicy,
+            double headSampleRate,
             Map<String, Double> serviceWeight, long targetTps,
             boolean logInjection, String metrics,
             Set<String> spanDrop, List<String> customHeaders,
             boolean emergencyOff, Set<String> serviceDisable, boolean dropOnFull,
             int batchSize, long exportDelay, int retryCount) {
         this.headSampleRate = headSampleRate;
-        this.tailPolicy = Collections.unmodifiableSet(tailPolicy);
         this.serviceWeight = Collections.unmodifiableMap(serviceWeight);
         this.targetTps = targetTps;
         this.logInjection = logInjection;
@@ -86,15 +82,9 @@ public final class RemoteConfig {
     /** 기본값으로 생성 (원격 설정 없을 때 사용). AgentConfig의 로컬 설정을 기본 베이스로 삼는다. */
     public static RemoteConfig defaults() {
         AgentConfig local = AgentConfig.get();
-        Set<String> defaultTailPolicy = new HashSet<>();
-        if (local.isTailSamplingEnabled()) {
-            defaultTailPolicy.add("error");
-            defaultTailPolicy.add("slow");
-            defaultTailPolicy.add("cluster");
-        }
 
         return new RemoteConfig(
-                local.getSampleRate(), defaultTailPolicy, Collections.emptyMap(), local.getTargetSps(),
+                local.getSampleRate(), Collections.emptyMap(), local.getTargetSps(),
                 true, "all", Collections.emptySet(), Collections.emptyList(),
                 false, Collections.emptySet(), true,
                 512, 5000L, 3
@@ -108,7 +98,6 @@ public final class RemoteConfig {
     // ── Getters ───────────────────────────────────────────────────────────────
 
     public double getHeadSampleRate() { return headSampleRate; }
-    public Set<String> getTailPolicy() { return tailPolicy; }
     public Map<String, Double> getServiceWeight() { return serviceWeight; }
     public long getTargetTps() { return targetTps; }
     public boolean isLogInjection() { return logInjection; }
@@ -126,7 +115,6 @@ public final class RemoteConfig {
 
     public static final class Builder {
         private double headSampleRate = 1.0;
-        private Set<String> tailPolicy = new HashSet<>(java.util.Arrays.asList("error", "slow", "cluster"));
         private Map<String, Double> serviceWeight = Collections.emptyMap();
         private long targetTps = 0L;
         private boolean logInjection = true;
@@ -141,7 +129,6 @@ public final class RemoteConfig {
         private int retryCount = 3;
 
         public Builder headSampleRate(double v) { this.headSampleRate = v; return this; }
-        public Builder tailPolicy(Set<String> v) { this.tailPolicy = v; return this; }
         public Builder serviceWeight(Map<String, Double> v) { this.serviceWeight = v; return this; }
         public Builder targetTps(long v) { this.targetTps = v; return this; }
         public Builder logInjection(boolean v) { this.logInjection = v; return this; }
@@ -157,7 +144,7 @@ public final class RemoteConfig {
 
         public RemoteConfig build() {
             return new RemoteConfig(
-                    headSampleRate, tailPolicy, serviceWeight, targetTps,
+                    headSampleRate, serviceWeight, targetTps,
                     logInjection, metrics, spanDrop, customHeaders,
                     emergencyOff, serviceDisable, dropOnFull,
                     batchSize, exportDelay, retryCount

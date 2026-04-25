@@ -1,7 +1,6 @@
 package com.agent.metric;
 
 import com.agent.span.Context;
-import com.agent.span.Span;
 import com.agent.span.SpanContext;
 
 import java.util.ArrayList;
@@ -145,10 +144,9 @@ public final class ExplicitBucketHistogram {
      * </ul>
      */
     private void tryRecordExemplar(long valueMs, int slotIdx) {
-        // 활성 span 확인 (ThreadLocal 1회 접근)
-        Span span = Context.currentSpan();
-        if (!span.isRecording()) return;
-        SpanContext ctx = span.getContext();
+        // isRecording() 체크 생략: PropagatedSpan은 기본값 false를 반환하지만
+        // 유효한 컨텍스트를 가지므로, isValid() + isSampled()로만 판별한다.
+        SpanContext ctx = Context.currentSpan().getContext();
         if (ctx == null || !ctx.isValid() || !ctx.isSampled()) return;
 
         // Algorithm R (reservoir size=1): N번째 관측값을 1/N 확률로 교체

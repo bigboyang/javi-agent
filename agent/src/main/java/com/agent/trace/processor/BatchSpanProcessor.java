@@ -177,51 +177,91 @@ public final class BatchSpanProcessor implements SpanProcessor {
     }
 
     private final class Worker implements Runnable {
+        private final List<Span> reusableBatch = new ArrayList<>(maxBatchSize);
+
         @Override
         public void run() {
-            List<Span> batch = new ArrayList<>(maxBatchSize);
             while (!isShutdown.get()) {
                 try {
-                    // forceFlush() 신호 처리 — interrupt로 깨어난 경우에도 확인
-                    drainFlushRequests(batch);
+                    // forceFlush() 신호 처리
+                    drainFlushRequests();
 
-                    Span firstItem = queue.poll(exportIntervalMs, TimeUnit.MILLISECONDS);
+                    // 지능형 배치: 큐가 70% 이상 차 있으면 지연 시간 없이 즉시 처리 시도
+                    long effectiveDelay = queue.size() > (maxQueueSize * 0.7) ? 0 : exportIntervalMs;
+                    
+                    Span firstItem = queue.poll(effectiveDelay, TimeUnit.MILLISECONDS);
                     if (firstItem != null) {
-                        batch.add(firstItem);
-                        int extra = queue.drainTo(batch, maxBatchSize - 1);
-                        int batchSize = 1 + extra;
-
-                        try {
-                            exporter.export(batch);
-                            exportedSpans.addAndGet(batchSize);
-                            exportedCounter.add(batchSize);
-                        } catch (Throwable t) {
-                            AgentLogger.error("[BatchSpanProcessor] Export error: " + t.getMessage());
-                            droppedSpans.addAndGet(batchSize);
-                            droppedCounter.add(batchSize);
-                        } finally {
-                            batch.clear();
-                            int qs = queue.size();
-                            queueSizeGauge.set(qs);
-                            queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
+                        reusableBatch.add(firstItem);
+                        queue.drainTo(reusableBatch, maxBatchSize - 1);
+                        
+                        exportWithRetry(reusableBatch);
+                        reusableBatch.clear();
+                        
+                        updateMetrics();
+                    } else if (queue.isEmpty() == false) {
+                        // poll 타임아웃 후에도 데이터가 있다면 처리
+                        queue.drainTo(reusableBatch, maxBatchSize);
+                        if (!reusableBatch.isEmpty()) {
+                            exportWithRetry(reusableBatch);
+                            reusableBatch.clear();
+                            updateMetrics();
                         }
                     }
                 } catch (InterruptedException e) {
-                    // forceFlush() 신호로 깨어난 경우 처리 후 루프 계속
-                    drainFlushRequests(batch);
-                    if (isShutdown.get()) {
-                        break;
-                    }
-                    // isShutdown이 아직 false면 루프 유지 (interrupt 플래그 클리어됨)
+                    drainFlushRequests();
+                    if (isShutdown.get()) break;
                 } catch (Throwable t) {
                     AgentLogger.error("[BatchSpanProcessor] Worker error: " + t.getMessage());
-                    batch.clear();
+                    reusableBatch.clear();
                 }
             }
         }
 
-        /** 대기 중인 모든 flushRequest를 처리하고 latch를 카운트다운한다. */
-        private void drainFlushRequests(List<Span> batch) {
+        private void exportWithRetry(List<Span> batch) {
+            int batchSize = batch.size();
+            int retries = 0;
+            int maxRetries = com.agent.config.RemoteConfigHolder.get().getRetryCount();
+            long backoffMs = 1000; // 시작 대기 시간 1초
+
+            while (true) {
+                try {
+                    com.agent.common.utils.concurrent.CompletableResultCode result = exporter.export(batch);
+                    if (result.isSuccess()) {
+                        exportedSpans.addAndGet(batchSize);
+                        exportedCounter.add(batchSize);
+                        return;
+                    }
+                    // 실패 시 아래 catch 블록과 동일한 재시도 로직 수행
+                    throw new RuntimeException("Exporter returned failure");
+                } catch (Throwable t) {
+                    if (retries < maxRetries && !isShutdown.get()) {
+                        retries++;
+                        AgentLogger.warn("[BatchSpanProcessor] Export failed, retrying (" + retries + "/" + maxRetries + ") in " + backoffMs + "ms: " + t.getMessage());
+                        try {
+                            Thread.sleep(backoffMs);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        backoffMs *= 2; // 지수 백오프
+                        continue;
+                    }
+                    // 재시도 소진 또는 종료 중
+                    AgentLogger.error("[BatchSpanProcessor] Export failed after " + retries + " retries. Dropping " + batchSize + " spans.");
+                    droppedSpans.addAndGet(batchSize);
+                    droppedCounter.add(batchSize);
+                    break;
+                }
+            }
+        }
+
+        private void updateMetrics() {
+            int qs = queue.size();
+            queueSizeGauge.set(qs);
+            queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
+        }
+
+        private void drainFlushRequests() {
             CountDownLatch latch;
             while ((latch = flushRequests.poll()) != null) {
                 try {

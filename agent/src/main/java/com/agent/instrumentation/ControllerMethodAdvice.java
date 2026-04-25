@@ -466,11 +466,13 @@ public final class ControllerMethodAdvice {
             state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             AgentLogger.debug("[HTTP] span error: " + error.getMessage());
         }
+
+        // HTTP 요청 메트릭 기록 — scope.close()/span.end() 이전에 호출해야
+        // Exemplar 샘플링이 Context.currentSpan()으로 traceId/spanId를 캡처할 수 있다.
+        recordHttpMetrics(state, error);
+
         state.scope.close();
         state.span.end();
-
-        // HTTP 요청 메트릭 기록 (Span과 별개로 100% 집계)
-        recordHttpMetrics(state, error);
 
         if (state.prevTraceId == null) MDC.remove("traceId"); else MDC.put("traceId", state.prevTraceId);
         if (state.prevSpanId  == null) MDC.remove("spanId");  else MDC.put("spanId",  state.prevSpanId);
