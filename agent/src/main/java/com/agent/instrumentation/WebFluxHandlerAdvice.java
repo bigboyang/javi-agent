@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.concurrent.ReactorContextPropagator;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
@@ -9,6 +10,7 @@ import com.agent.span.SpanKind;
 import com.agent.span.SpanStatus;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
+import net.bytebuddy.implementation.bytecode.assign.Assigner;
 import org.slf4j.MDC;
 
 import java.lang.reflect.Method;
@@ -18,23 +20,28 @@ import java.lang.reflect.Method;
  *
  * 대상: org.springframework.web.reactive.DispatcherHandler.handle(ServerWebExchange, Object)
  *
- * WebFlux 계측의 핵심 제약:
- * - Reactor의 실제 처리는 별도 스케줄러 스레드에서 일어나므로, ThreadLocal 기반 Context는
- *   handle() 진입 시점(Netty 이벤트 루프)의 span만 캡처한다.
- * - onEnter/onExit은 항상 같은 스레드에서 호출되므로 span 라이프사이클은 올바르게 관리된다.
- * - Reactor 파이프라인 내부(flatMap 등)의 추적이 필요하다면 별도로 ReactorContextPropagation을
- *   구현해야 하며, 이 Advice는 그 진입점(entry span)을 제공한다.
+ * === Reactor 비동기 span 라이프사이클 ===
  *
- * W3C traceparent 추출:
- * - ServerWebExchange.getRequest().getHeaders() 를 reflection으로 접근한다.
- * - 헤더 접근 실패 시 새로운 root span을 생성한다 (분산 트레이싱 단절은 허용).
+ * handle()은 Mono<Void>를 즉시 반환한다 — 실제 처리는 구독(subscribe) 이후에 일어난다.
+ * onExit에서 span을 즉시 종료하면 span lifetime이 Mono 구성 시간만 캡처하는 버그가 생긴다.
  *
- * Span 명: "METHOD /path" (예: "GET /api/users")
- * 경로를 얻지 못하면 "WebFlux handler"로 fallback.
+ * 수정 후 흐름:
+ *  1. onEnter  : span 생성 + ThreadLocal(scope) + MDC 설정
+ *  2. handle() : Mono 파이프라인 구성 (즉시 반환)
+ *  3. onExit   : MDC 즉시 복원, scope는 열린 채로 유지 (Reactor Schedulers 훅이 캡처 가능)
+ *               반환된 Mono를 wrapMonoWithLifecycle()로 감싼다
+ *  4. 구독 시  : doOnSubscribe → scope.close() (Netty 스레드 ThreadLocal 정리)
+ *  5. operator : Schedulers 훅이 publishOn/subscribeOn 경계에서 span 전파
+ *  6. Mono 종료 : doOnError → span 오류 기록, doFinally → span.end()
+ *
+ * === 한계 ===
+ * - MDC(traceId/spanId)는 Netty 진입 스레드에서만 설정 후 즉시 복원된다.
+ *   Reactor 스케줄러 스레드의 MDC는 ContextPropagatingRunnable이 span 정보를
+ *   snapshot으로 캡처할 때 이미 복원된 이전 값으로 캡처된다.
+ *   → 추후 Reactor contextWrite() 기반 전파로 개선 가능.
  */
 public final class WebFluxHandlerAdvice {
 
-    // getRequest() reflection 메서드 캐싱 — 첫 호출 이후 재사용
     private static volatile Method GET_REQUEST_METHOD = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
@@ -42,15 +49,16 @@ public final class WebFluxHandlerAdvice {
             @Advice.Argument(0) Object exchange,
             @Advice.Argument(1) Object handler) {
 
+        // Reactor Schedulers 훅: 최초 WebFlux 요청 시 지연 설치
+        ReactorContextPropagator.installIfNeeded();
+
         if (exchange == null) return null;
 
-        // W3C traceparent 추출 — 분산 트레이싱 컨텍스트 이어받기
         SpanContext remoteParent = null;
         String httpMethod = null;
         String path = null;
 
         try {
-            // ServerWebExchange -> ServerHttpRequest -> URI/Headers
             Object request = getRequest(exchange);
             if (request != null) {
                 httpMethod = extractHttpMethod(request);
@@ -59,7 +67,6 @@ public final class WebFluxHandlerAdvice {
             }
         } catch (Throwable ignored) {}
 
-        // span name: "GET /api/orders" 형식. OTel HTTP 시맨틱 컨벤션 준수
         String spanName;
         if (httpMethod != null && path != null) {
             spanName = httpMethod + " " + path;
@@ -76,12 +83,10 @@ public final class WebFluxHandlerAdvice {
         }
         Span span = builder.startSpan();
 
-        // OTel HTTP 시맨틱 속성 설정
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (path != null)       span.setAttribute("http.target", path);
         span.setAttribute("http.framework", "spring-webflux");
 
-        // handler에서 route 패턴 추출 시도 (HandlerMethod인 경우)
         if (handler != null) {
             try {
                 Method getBeanType = handler.getClass().getMethod("getBeanType");
@@ -107,27 +112,97 @@ public final class WebFluxHandlerAdvice {
         return new State(span, scope, prevTraceId, prevSpanId);
     }
 
+    /**
+     * onExit 변경사항:
+     * - @Advice.Return(readOnly=false) 로 반환된 Mono를 캡처하여 라이프사이클 래퍼로 교체
+     * - 동기 오류 또는 null Mono: 즉시 scope.close() + span.end()
+     * - 정상 Mono 반환: MDC만 즉시 복원, scope는 doOnSubscribe까지 열어둔다
+     */
     @Advice.OnMethodExit(onThrowable = Throwable.class, suppress = Throwable.class)
     public static void onExit(
             @Advice.Enter State state,
-            @Advice.Thrown Throwable error) {
+            @Advice.Thrown Throwable error,
+            @Advice.Return(readOnly = false, typing = Assigner.Typing.DYNAMIC) Object returnMono) {
 
         if (state == null) return;
-        if (error != null) {
-            state.span.recordException(error);
-            state.span.setStatus(SpanStatus.ERROR, error.getMessage());
-        }
-        state.scope.close();
-        state.span.end();
 
+        if (error != null || returnMono == null) {
+            if (error != null) {
+                state.span.recordException(error);
+                state.span.setStatus(SpanStatus.ERROR, error.getMessage());
+            }
+            state.scope.close();
+            state.span.end();
+            restoreMdc(state);
+            return;
+        }
+
+        // MDC를 Netty 스레드에서 즉시 복원한다.
+        // scope는 열린 채로 유지: Reactor Schedulers 훅이 publishOn 시 span을 ThreadLocal에서 캡처한다.
+        restoreMdc(state);
+
+        Object wrapped = wrapMonoWithLifecycle(returnMono, state);
+        if (wrapped != null) {
+            returnMono = wrapped;
+        } else {
+            // 래핑 실패 시 폴백: 즉시 정리
+            state.scope.close();
+            state.span.end();
+        }
+    }
+
+    /**
+     * 반환된 Mono에 span 라이프사이클 훅을 추가한다.
+     *
+     * doOnSubscribe  : scope.close() — Netty 스레드의 ThreadLocal 정리 (구독 시점)
+     * doOnError      : span 오류 기록
+     * doFinally      : span.end() — complete / error / cancel 모두 처리
+     *
+     * 람다 본문은 에이전트 클래스로더 타입(Scope, Span, SpanStatus)만 사용하므로
+     * 크로스 클래스로더 이슈가 없다. Reactor는 Consumer 인터페이스로만 호출한다.
+     */
+    private static Object wrapMonoWithLifecycle(Object mono, final State state) {
+        try {
+            java.util.function.Consumer<Object> onSubscribe = subscriber -> {
+                try { state.scope.close(); } catch (Throwable ignored) {}
+            };
+            Object m1 = mono.getClass()
+                    .getMethod("doOnSubscribe", java.util.function.Consumer.class)
+                    .invoke(mono, onSubscribe);
+
+            java.util.function.Consumer<Throwable> onError = e -> {
+                if (e != null) {
+                    try {
+                        state.span.recordException(e);
+                        state.span.setStatus(SpanStatus.ERROR, e.getMessage());
+                    } catch (Throwable ignored) {}
+                }
+            };
+            Object m2 = m1.getClass()
+                    .getMethod("doOnError", java.util.function.Consumer.class)
+                    .invoke(m1, onError);
+
+            java.util.function.Consumer<Object> onFinally = signalType -> {
+                try { state.span.end(); } catch (Throwable ignored) {}
+            };
+            return m2.getClass()
+                    .getMethod("doFinally", java.util.function.Consumer.class)
+                    .invoke(m2, onFinally);
+
+        } catch (Throwable t) {
+            AgentLogger.debug("[WebFlux] Mono 라이프사이클 래핑 실패: " + t.getMessage());
+            return null;
+        }
+    }
+
+    private static void restoreMdc(State state) {
         if (state.prevTraceId == null) MDC.remove("traceId");
         else MDC.put("traceId", state.prevTraceId);
         if (state.prevSpanId == null) MDC.remove("spanId");
         else MDC.put("spanId", state.prevSpanId);
     }
 
-    // --- reflection 헬퍼: Advice 클래스 내부 static 메서드는 Advice 바이트코드로 인라인되지 않으므로
-    //     별도 메서드로 분리해 가독성 확보 (suppress=Throwable이 onEnter를 보호)
+    // --- reflection 헬퍼 ---
 
     private static Object getRequest(Object exchange) throws Exception {
         if (GET_REQUEST_METHOD == null) {
@@ -138,7 +213,6 @@ public final class WebFluxHandlerAdvice {
 
     private static String extractHttpMethod(Object request) {
         try {
-            // ServerHttpRequest.getMethod() -> HttpMethod enum
             Object httpMethod = request.getClass().getMethod("getMethod").invoke(request);
             return httpMethod == null ? null : httpMethod.toString();
         } catch (Throwable t) {
@@ -148,7 +222,6 @@ public final class WebFluxHandlerAdvice {
 
     private static String extractPath(Object request) {
         try {
-            // ServerHttpRequest.getURI().getPath()
             Object uri = request.getClass().getMethod("getURI").invoke(request);
             if (uri == null) return null;
             return (String) uri.getClass().getMethod("getPath").invoke(uri);
@@ -159,7 +232,6 @@ public final class WebFluxHandlerAdvice {
 
     private static SpanContext extractRemoteParent(Object request) {
         try {
-            // ServerHttpRequest.getHeaders().getFirst("traceparent")
             Object headers = request.getClass().getMethod("getHeaders").invoke(request);
             if (headers == null) return null;
             String traceparent = (String) headers.getClass()

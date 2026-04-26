@@ -6,8 +6,11 @@ import com.agent.propagation.Baggage;
  * 현재 스팬 및 비즈니스 맥락(Baggage)을 관리하는 ThreadLocal 컨텍스트.
  */
 public final class Context {
-    private static final ThreadLocal<Span> CURRENT_SPAN = new ThreadLocal<>();
-    private static final ThreadLocal<Baggage> CURRENT_BAGGAGE = new ThreadLocal<>();
+    // InheritableThreadLocal: 자식 스레드(Virtual Thread 포함)가 부모의 span context를 자동 상속.
+    // Virtual Thread는 생성 시점(= 태스크 제출 시점)에 값이 복사되어 올바른 propagation을 제공한다.
+    // 플랫폼 스레드 풀에서는 ContextPropagatingRunnable의 명시적 restore()가 이 값을 덮어쓰므로 안전하다.
+    private static final InheritableThreadLocal<Span> CURRENT_SPAN = new InheritableThreadLocal<>();
+    private static final InheritableThreadLocal<Baggage> CURRENT_BAGGAGE = new InheritableThreadLocal<>();
 
     private Context() {}
 

@@ -78,6 +78,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfigValidator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JavaHttpClientAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/SystemClock.java
+/Users/kkc/APM/agent/src/main/java/com/agent/concurrent/ReactorContextPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/MultiTextMapPropagator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/ExplicitBucketHistogram.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/SamplingDecision.java
@@ -148,6 +149,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/span/TraceFlags.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/Span.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/TextMapSetter.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/VirtualThreadExecutorAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/profiling/ProfilingExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/Clock.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricLogger.java

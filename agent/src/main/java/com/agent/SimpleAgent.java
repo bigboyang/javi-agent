@@ -8,6 +8,7 @@ import com.agent.instrumentation.ControllerMethodAdvice;
 import com.agent.instrumentation.HttpServletAdvice;
 import com.agent.instrumentation.ExecutorCallableAdvice;
 import com.agent.instrumentation.ExecutorServiceAdvice;
+import com.agent.instrumentation.VirtualThreadExecutorAdvice;
 import com.agent.instrumentation.HttpClientAdvice;
 import com.agent.instrumentation.HttpRequestExecuteAdvice;
 import com.agent.instrumentation.JavaHttpClientAdvice;
@@ -184,7 +185,17 @@ public class SimpleAgent {
                                         .and(takesArgument(0, named("java.util.concurrent.Callable"))))))
                 .installOn(inst);
 
-        AgentLogger.info("ExecutorService (ThreadPool) 비동기 계측 등록 완료");
+        // Java 21 Virtual Thread per-task executor 계측
+        // ThreadPerTaskExecutor는 ThreadPoolExecutor를 상속하지 않으므로 별도 계측 필요
+        bootstrapBuilder
+                .type(named("java.util.concurrent.ThreadPerTaskExecutor"))
+                .transform((builder, type, classLoader, module, protectionDomain) ->
+                        builder.visit(Advice.to(VirtualThreadExecutorAdvice.class)
+                                .on(named("execute")
+                                        .and(takesArgument(0, named("java.lang.Runnable"))))))
+                .installOn(inst);
+
+        AgentLogger.info("ExecutorService (ThreadPool + VirtualThread) 비동기 계측 등록 완료");
     }
 
     /**
