@@ -115,10 +115,25 @@ public final class AppLogCollector {
                 // Bug #9: JUL 로그를 OTLP 파이프라인에도 전달 — ClickHouse에서 JUL 로그 수집
                 String body = formatJulBody(record);
                 SdkLogEmitter.emit(loggerName, julLevelToSeverity(record.getLevel()), body,
-                        java.util.Collections.emptyMap());
+                        buildJulAttributes(record));
             } finally {
                 PUBLISHING.set(false);
             }
+        }
+
+        private static java.util.Map<String, String> buildJulAttributes(LogRecord record) {
+            java.util.Map<String, String> attrs = new java.util.HashMap<>(6);
+            attrs.put("thread.name", Thread.currentThread().getName());
+            Throwable thrown = record.getThrown();
+            if (thrown != null) {
+                attrs.put("exception.type", thrown.getClass().getName());
+                String msg = thrown.getMessage();
+                if (msg != null && !msg.isEmpty()) attrs.put("exception.message", msg);
+                java.io.StringWriter sw = new java.io.StringWriter(512);
+                thrown.printStackTrace(new java.io.PrintWriter(sw));
+                attrs.put("exception.stacktrace", sw.toString());
+            }
+            return attrs;
         }
 
         /** JUL Level → OTel severity 문자열 변환. */

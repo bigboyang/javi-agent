@@ -4,7 +4,8 @@ import com.agent.logs.SdkLogEmitter;
 import com.agent.span.Context;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import net.bytebuddy.asm.Advice;
 import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.core.LogEvent;
@@ -35,7 +36,7 @@ public class Log4j2Advice {
                         logEvent.getLoggerName(),
                         logEvent.getLevel().toString(),
                         message,
-                        Collections.emptyMap()
+                        buildAttributes(logEvent)
                 );
 
                 // ThreadContext fallback: logInjection이 활성화된 경우에만 주입
@@ -64,5 +65,21 @@ public class Log4j2Advice {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    private static Map<String, String> buildAttributes(LogEvent event) {
+        Map<String, String> attrs = new HashMap<>(6);
+        attrs.put("thread.name", event.getThreadName());
+
+        Throwable thrown = event.getThrown();
+        if (thrown != null) {
+            attrs.put("exception.type", thrown.getClass().getName());
+            String msg = thrown.getMessage();
+            if (msg != null && !msg.isEmpty()) attrs.put("exception.message", msg);
+            java.io.StringWriter sw = new java.io.StringWriter(512);
+            thrown.printStackTrace(new java.io.PrintWriter(sw));
+            attrs.put("exception.stacktrace", sw.toString());
+        }
+        return attrs;
     }
 }

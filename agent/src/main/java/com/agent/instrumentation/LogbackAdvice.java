@@ -4,7 +4,8 @@ import com.agent.logs.SdkLogEmitter;
 import com.agent.span.Context;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import net.bytebuddy.asm.Advice;
 import org.slf4j.MDC;
 
@@ -37,7 +38,7 @@ public class LogbackAdvice {
                         loggingEvent.getLoggerName(),
                         loggingEvent.getLevel().toString(),
                         message,
-                        Collections.emptyMap()
+                        buildAttributes(loggingEvent)
                 );
 
                 // MDC fallback: logInjection이 활성화된 경우에만 주입
@@ -66,5 +67,36 @@ public class LogbackAdvice {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    private static Map<String, String> buildAttributes(ch.qos.logback.classic.spi.ILoggingEvent event) {
+        Map<String, String> attrs = new HashMap<>(6);
+        attrs.put("thread.name", event.getThreadName());
+
+        ch.qos.logback.classic.spi.IThrowableProxy proxy = event.getThrowableProxy();
+        if (proxy != null) {
+            attrs.put("exception.type", proxy.getClassName());
+            String msg = proxy.getMessage();
+            if (msg != null && !msg.isEmpty()) attrs.put("exception.message", msg);
+            attrs.put("exception.stacktrace", buildStackTrace(proxy));
+        }
+        return attrs;
+    }
+
+    private static String buildStackTrace(ch.qos.logback.classic.spi.IThrowableProxy proxy) {
+        StringBuilder sb = new StringBuilder(512);
+        sb.append(proxy.getClassName());
+        if (proxy.getMessage() != null) sb.append(": ").append(proxy.getMessage());
+        ch.qos.logback.classic.spi.StackTraceElementProxy[] steps = proxy.getStackTraceElementProxyArray();
+        if (steps != null) {
+            for (ch.qos.logback.classic.spi.StackTraceElementProxy step : steps) {
+                sb.append("\n\tat ").append(step.getSTEAsString());
+            }
+        }
+        ch.qos.logback.classic.spi.IThrowableProxy cause = proxy.getCause();
+        if (cause != null) {
+            sb.append("\nCaused by: ").append(buildStackTrace(cause));
+        }
+        return sb.toString();
     }
 }
