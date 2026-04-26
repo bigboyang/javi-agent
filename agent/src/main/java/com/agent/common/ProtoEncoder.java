@@ -124,6 +124,16 @@ public final class ProtoEncoder {
         out.write((value >> 24) & 0xFF);
     }
 
+    /**
+     * string 필드를 빈 문자열이더라도 강제로 쓴다.
+     * AnyValue.string_value처럼 빈 문자열로 타입을 명시해야 할 때 사용.
+     */
+    public static void writeStringAlways(ByteArrayOutputStream out, int fieldNumber, String value) {
+        byte[] bytes = (value != null ? value : "").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        writeTag(out, fieldNumber, WIRE_LEN);
+        writeLengthDelimited(out, bytes);
+    }
+
     /** fixed64 (타임스탬프 나노초) 필드. */
     public static void writeFixed64Field(ByteArrayOutputStream out, int fieldNumber, long value) {
         if (value == 0L) return;

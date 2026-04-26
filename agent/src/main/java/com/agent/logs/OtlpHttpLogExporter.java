@@ -31,14 +31,18 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
     private static final int FN_LOG_SPAN_ID            = 10;
     private static final int FN_LOG_OBSERVED_TIME_NS   = 11;  // fixed64: when agent observed the log
 
-    private static final int FN_RESOURCE_LOGS = 1;
-    private static final int FN_RL_RESOURCE   = 1;
-    private static final int FN_RL_SCOPE_LOGS = 2;
-    private static final int FN_SL_SCOPE      = 1;
-    private static final int FN_SL_RECORDS    = 2;
-    private static final int FN_SCOPE_NAME    = 1;
-    private static final int FN_SCOPE_VERSION = 2;
+    private static final int FN_RESOURCE_LOGS  = 1;
+    private static final int FN_RL_RESOURCE    = 1;
+    private static final int FN_RL_SCOPE_LOGS  = 2;
+    private static final int FN_RL_SCHEMA_URL  = 3;
+    private static final int FN_SL_SCOPE       = 1;
+    private static final int FN_SL_RECORDS     = 2;
+    private static final int FN_SL_SCHEMA_URL  = 3;
+    private static final int FN_SCOPE_NAME     = 1;
+    private static final int FN_SCOPE_VERSION  = 2;
     private static final int FN_RESOURCE_ATTRS = 1;
+
+    private static final String OTEL_SCHEMA_URL = "https://opentelemetry.io/schemas/1.27.0";
 
     private static final int FN_KV_KEY    = 1;
     private static final int FN_KV_VALUE  = 2;
@@ -102,10 +106,12 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
         ProtoEncoder.writeMessage(scopeLogsOut, FN_SL_SCOPE, scopeOut.toByteArray());
         byte[] recBytes = recordsOut.toByteArray();
         scopeLogsOut.write(recBytes, 0, recBytes.length);
+        ProtoEncoder.writeString(scopeLogsOut, FN_SL_SCHEMA_URL, OTEL_SCHEMA_URL);
 
         ByteArrayOutputStream rlOut = new ByteArrayOutputStream(128 + scopeLogsOut.size());
         ProtoEncoder.writeMessage(rlOut, FN_RL_RESOURCE, resourceBytes);
         ProtoEncoder.writeMessage(rlOut, FN_RL_SCOPE_LOGS, scopeLogsOut.toByteArray());
+        ProtoEncoder.writeString(rlOut, FN_RL_SCHEMA_URL, OTEL_SCHEMA_URL);
 
         ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rlOut.size() + 4);
         ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_LOGS, rlOut.toByteArray());
@@ -168,7 +174,8 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
         ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + (value != null ? value.length() : 0) + 8);
         ProtoEncoder.writeString(out, FN_KV_KEY, key);
         ByteArrayOutputStream av = new ByteArrayOutputStream((value != null ? value.length() : 0) + 4);
-        ProtoEncoder.writeString(av, FN_AV_STRING, value != null ? value : "");
+        // writeStringAlways: 빈 문자열도 string_value 타입을 명시해야 AnyValue의 oneof가 올바르게 설정됨
+        ProtoEncoder.writeStringAlways(av, FN_AV_STRING, value != null ? value : "");
         ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
         return out.toByteArray();
     }
