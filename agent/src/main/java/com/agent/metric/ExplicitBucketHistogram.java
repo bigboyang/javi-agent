@@ -155,7 +155,8 @@ public final class ExplicitBucketHistogram {
         if (!accept) return;
 
         long timeUnixNano = System.currentTimeMillis() * 1_000_000L;
-        Exemplar exemplar = new Exemplar(valueMs, timeUnixNano, ctx.getTraceId(), ctx.getSpanId(), null);
+        byte traceFlags = ctx.getTraceFlags().asByte();
+        Exemplar exemplar = new Exemplar(valueMs, timeUnixNano, ctx.getTraceId(), ctx.getSpanId(), traceFlags, null);
         exemplarSlots[slotIdx].set(exemplar);
     }
 

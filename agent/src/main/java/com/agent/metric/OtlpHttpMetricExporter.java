@@ -68,6 +68,7 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_EX_AS_DOUBLE       = 3;
     private static final int FN_EX_SPAN_ID         = 4;
     private static final int FN_EX_TRACE_ID        = 5;
+    private static final int FN_EX_FLAGS           = 8;  // uint32 SpanFlags (SAMPLED=0x01)
 
     private static final int FN_RESOURCE_METRICS   = 1;
     private static final int FN_RM_RESOURCE        = 1;
@@ -360,6 +361,9 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         if (spanId != null) ProtoEncoder.writeBytes(out, FN_EX_SPAN_ID, spanId);
         byte[] traceId = ProtoEncoder.hexToBytes(ex.getTraceId());
         if (traceId != null) ProtoEncoder.writeBytes(out, FN_EX_TRACE_ID, traceId);
+        // flags: SpanFlags (uint32, varint) — OTel Collector/Grafana Mimir가 trace 링크 검증에 사용
+        int flags = ex.getTraceFlags() & 0xFF;
+        if (flags != 0) ProtoEncoder.writeVarint32(out, FN_EX_FLAGS, flags);
         return out.toByteArray();
     }
 

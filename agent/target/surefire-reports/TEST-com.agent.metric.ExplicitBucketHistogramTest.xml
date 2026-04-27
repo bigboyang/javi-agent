@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.agent.span.SdkSpanTest" time="0.024" tests="17" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.agent.metric.ExplicitBucketHistogramTest" time="0.008" tests="11" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="24"/>
     <property name="sun.jnu.encoding" value="UTF-8"/>
@@ -56,33 +56,15 @@
     <property name="sun.io.unicode.encoding" value="UnicodeBig"/>
     <property name="java.class.version" value="68.0"/>
   </properties>
-  <testcase name="endIsIdempotent" classname="com.agent.span.SdkSpanTest" time="0.002"/>
-  <testcase name="endTimeNanosSetAfterEnd" classname="com.agent.span.SdkSpanTest" time="0.001"/>
-  <testcase name="updateNameWhileRecording" classname="com.agent.span.SdkSpanTest" time="0.0"/>
-  <testcase name="isRecordingTrueBeforeEnd" classname="com.agent.span.SdkSpanTest" time="0.0"/>
-  <testcase name="getEventsReturnsDefensiveCopy" classname="com.agent.span.SdkSpanTest" time="0.003"/>
-  <testcase name="setStatusOk" classname="com.agent.span.SdkSpanTest" time="0.001">
-    <system-err><![CDATA[[2026-04-27 12:02:33] [FINE] span status set: OK
-]]></system-err>
-  </testcase>
-  <testcase name="setAttributeIgnoredAfterEnd" classname="com.agent.span.SdkSpanTest" time="0.002"/>
-  <testcase name="recordExceptionIgnoredAfterEnd" classname="com.agent.span.SdkSpanTest" time="0.002"/>
-  <testcase name="isRecordingFalseAfterEnd" classname="com.agent.span.SdkSpanTest" time="0.001"/>
-  <testcase name="getAttributesReturnsDefensiveCopy" classname="com.agent.span.SdkSpanTest" time="0.003"/>
-  <testcase name="setAttributeDropsWhenLimitReached" classname="com.agent.span.SdkSpanTest" time="0.0">
-    <system-err><![CDATA[[2026-04-27 12:02:33] [FINE] span attribute dropped: limit exceeded
-]]></system-err>
-  </testcase>
-  <testcase name="addEventBasic" classname="com.agent.span.SdkSpanTest" time="0.0"/>
-  <testcase name="setStatusNullDefaultsToUnset" classname="com.agent.span.SdkSpanTest" time="0.001">
-    <system-err><![CDATA[[2026-04-27 12:02:33] [FINE] span status set: UNSET
-]]></system-err>
-  </testcase>
-  <testcase name="updateNameAfterEndIgnored" classname="com.agent.span.SdkSpanTest" time="0.001"/>
-  <testcase name="addEventDropsWhenLimitReached" classname="com.agent.span.SdkSpanTest" time="0.0">
-    <system-err><![CDATA[[2026-04-27 12:02:33] [FINE] span event dropped: limit exceeded
-]]></system-err>
-  </testcase>
-  <testcase name="recordExceptionCreatesOtelCompliantEvent" classname="com.agent.span.SdkSpanTest" time="0.0"/>
-  <testcase name="setAttributeOverwriteDoesNotGrowMap" classname="com.agent.span.SdkSpanTest" time="0.0"/>
+  <testcase name="noExemplarWhenSpanNotSampled" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.001"/>
+  <testcase name="noExemplarWhenInvalidSpanContext" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="collectAndResetClearsSlots" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.001"/>
+  <testcase name="percentileEstimation" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.001"/>
+  <testcase name="basicCountSumMinMax" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="exemplarPerBucketSlot" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="exemplarCapturedWhenSampledSpanActive" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="overflowBucketCounts" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="noExemplarAfterScopeClose" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.001"/>
+  <testcase name="noExemplarWhenNoActiveSpan" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
+  <testcase name="bucketCountsLength" classname="com.agent.metric.ExplicitBucketHistogramTest" time="0.0"/>
 </testsuite>

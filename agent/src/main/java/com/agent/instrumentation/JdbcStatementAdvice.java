@@ -117,9 +117,11 @@ public final class JdbcStatementAdvice {
             state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             AgentLogger.debug("[JDBC] span error: " + error.getMessage());
         }
+        // Exemplar 캡처를 위해 scope.close() 전에 메트릭 기록 — scope.close() 후에는
+        // Context.currentSpan()이 Span.invalid()를 반환하므로 traceId/spanId 캡처 불가.
+        recordDbMetrics(state.dbSystem, state.dbOperation, state.startNano, error);
         state.scope.close();
         state.span.end();
-        recordDbMetrics(state.dbSystem, state.dbOperation, state.startNano, error);
     }
 
     /**

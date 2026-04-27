@@ -90,10 +90,11 @@ public final class JdbcPreparedStatementAdvice {
             state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             AgentLogger.debug("[JDBC-PS] span error: " + error.getMessage());
         }
-        state.scope.close();
-        state.span.end();
+        // Exemplar 캡처를 위해 scope.close() 전에 메트릭 기록
         // JdbcStatementAdvice 공유 메서드 — 캐시 공유로 이중 등록 없음
         JdbcStatementAdvice.recordDbMetrics(state.dbSystem, state.dbOperation, state.startNano, error);
+        state.scope.close();
+        state.span.end();
     }
 
     /**
