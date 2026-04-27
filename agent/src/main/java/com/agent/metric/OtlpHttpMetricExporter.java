@@ -8,6 +8,7 @@ import com.agent.common.ResourceInfo;
 import com.agent.logs.AgentLogger;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -109,6 +110,23 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final long PROCESS_START_NS;
     static {
         PROCESS_START_NS = java.lang.management.ManagementFactory.getRuntimeMXBean().getStartTime() * 1_000_000L;
+    }
+
+    // Thread-local BAOS pool: encode 메서드의 per-metric BAOS 생성 비용을 제거한다.
+    // deque는 중첩 깊이(최대 ~6)만큼 성장 후 안정화되어 이후 할당이 없다.
+    private static final ThreadLocal<ArrayDeque<ByteArrayOutputStream>> TL_BAOS_POOL =
+            ThreadLocal.withInitial(ArrayDeque::new);
+
+    private static ByteArrayOutputStream borrowOut() {
+        ArrayDeque<ByteArrayOutputStream> pool = TL_BAOS_POOL.get();
+        if (pool.isEmpty()) return new ByteArrayOutputStream(256);
+        ByteArrayOutputStream out = pool.pop();
+        out.reset();
+        return out;
+    }
+
+    private static void returnOut(ByteArrayOutputStream out) {
+        TL_BAOS_POOL.get().push(out);
     }
 
     // ---- DELTA histogram 상태 추적 ----
@@ -244,49 +262,61 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     }
 
     private byte[] encodeMetric(MetricData metric) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        ProtoEncoder.writeString(out, FN_METRIC_NAME, metric.getName());
-        if (metric.getDescription() != null && !metric.getDescription().isEmpty())
-            ProtoEncoder.writeString(out, FN_METRIC_DESCRIPTION, metric.getDescription());
-        if (metric.getUnit() != null && !metric.getUnit().isEmpty())
-            ProtoEncoder.writeString(out, FN_METRIC_UNIT, metric.getUnit());
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            ProtoEncoder.writeString(out, FN_METRIC_NAME, metric.getName());
+            if (metric.getDescription() != null && !metric.getDescription().isEmpty())
+                ProtoEncoder.writeString(out, FN_METRIC_DESCRIPTION, metric.getDescription());
+            if (metric.getUnit() != null && !metric.getUnit().isEmpty())
+                ProtoEncoder.writeString(out, FN_METRIC_UNIT, metric.getUnit());
 
-        MetricData.MetricType type = metric.getType() != null ? metric.getType() : MetricData.MetricType.GAUGE;
+            MetricData.MetricType type = metric.getType() != null ? metric.getType() : MetricData.MetricType.GAUGE;
 
-        switch (type) {
-            case GAUGE:
-                ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints()));
-                break;
-            case SUM:
-                ProtoEncoder.writeMessage(out, FN_METRIC_SUM, encodeSum(metric.getPoints()));
-                break;
-            case HISTOGRAM:
-                ProtoEncoder.writeMessage(out, FN_METRIC_HISTOGRAM, encodeHistogramDelta(metric));
-                break;
-            case EXPONENTIAL_HISTOGRAM:
-                ProtoEncoder.writeMessage(out, FN_METRIC_EXPONENTIAL_HISTOGRAM,
-                        encodeExponentialHistogram(metric));
-                break;
-            default:
-                ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints()));
+            switch (type) {
+                case GAUGE:
+                    ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints()));
+                    break;
+                case SUM:
+                    ProtoEncoder.writeMessage(out, FN_METRIC_SUM, encodeSum(metric.getPoints()));
+                    break;
+                case HISTOGRAM:
+                    ProtoEncoder.writeMessage(out, FN_METRIC_HISTOGRAM, encodeHistogramDelta(metric));
+                    break;
+                case EXPONENTIAL_HISTOGRAM:
+                    ProtoEncoder.writeMessage(out, FN_METRIC_EXPONENTIAL_HISTOGRAM,
+                            encodeExponentialHistogram(metric));
+                    break;
+                default:
+                    ProtoEncoder.writeMessage(out, FN_METRIC_GAUGE, encodeGauge(metric.getPoints()));
+            }
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        return out.toByteArray();
     }
 
     private static byte[] encodeGauge(Collection<MetricData.Point> points) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64);
-        for (MetricData.Point point : points)
-            ProtoEncoder.writeMessage(out, FN_GAUGE_DATA_POINTS, encodeNumberDataPoint(point, 0L));
-        return out.toByteArray();
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            for (MetricData.Point point : points)
+                ProtoEncoder.writeMessage(out, FN_GAUGE_DATA_POINTS, encodeNumberDataPoint(point, 0L));
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
+        }
     }
 
     private static byte[] encodeSum(Collection<MetricData.Point> points) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(points.size() * 64 + 8);
-        for (MetricData.Point point : points)
-            ProtoEncoder.writeMessage(out, FN_SUM_DATA_POINTS, encodeNumberDataPoint(point, PROCESS_START_NS));
-        ProtoEncoder.writeVarint32(out, FN_SUM_TEMPORALITY, TEMPORALITY_CUMULATIVE);
-        ProtoEncoder.writeVarint32(out, FN_SUM_IS_MONOTONIC, 1);
-        return out.toByteArray();
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            for (MetricData.Point point : points)
+                ProtoEncoder.writeMessage(out, FN_SUM_DATA_POINTS, encodeNumberDataPoint(point, PROCESS_START_NS));
+            ProtoEncoder.writeVarint32(out, FN_SUM_TEMPORALITY, TEMPORALITY_CUMULATIVE);
+            ProtoEncoder.writeVarint32(out, FN_SUM_IS_MONOTONIC, 1);
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
+        }
     }
 
     /**
@@ -298,16 +328,20 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
      */
     private byte[] encodeHistogramDelta(MetricData metric) {
         Collection<MetricData.HistogramPoint> hpts = metric.getHistogramPoints();
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        if (hpts != null && !hpts.isEmpty()) {
-            for (MetricData.HistogramPoint hp : hpts)
-                ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeDeltaPoint(metric.getName(), hp));
-        } else {
-            for (MetricData.Point point : metric.getPoints())
-                ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point, PROCESS_START_NS));
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            if (hpts != null && !hpts.isEmpty()) {
+                for (MetricData.HistogramPoint hp : hpts)
+                    ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeDeltaPoint(metric.getName(), hp));
+            } else {
+                for (MetricData.Point point : metric.getPoints())
+                    ProtoEncoder.writeMessage(out, FN_HIST_DATA_POINTS, encodeHistogramDataPointSimple(point, PROCESS_START_NS));
+            }
+            ProtoEncoder.writeVarint32(out, FN_HIST_TEMPORALITY, TEMPORALITY_DELTA);
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        ProtoEncoder.writeVarint32(out, FN_HIST_TEMPORALITY, TEMPORALITY_DELTA);
-        return out.toByteArray();
     }
 
     /**
@@ -370,75 +404,87 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
             MetricData.HistogramPoint hp,
             long startTimeNs, long timeNs,
             long count, double sum, long[] bucketCounts) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        encodeAttrs(out, FN_HDP_ATTRS, hp.getAttributes(), hp.getTypedAttributes());
-        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
-        if (timeNs > 0)      ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, timeNs);
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            encodeAttrs(out, FN_HDP_ATTRS, hp.getAttributes(), hp.getTypedAttributes());
+            if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
+            if (timeNs > 0)      ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, timeNs);
 
-        // Fix: count은 uint64 → varint (이전 코드: writeFixed64Field → wire type mismatch)
-        ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, count);
-        ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, sum);
+            ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, count);
+            ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, sum);
 
-        // Fix: bucket_counts은 repeated uint64 → packed varint (이전 코드: packed fixed64)
-        ProtoEncoder.writePackedUint64(out, FN_HDP_BUCKET_COUNTS, bucketCounts);
-        ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
+            ProtoEncoder.writePackedUint64(out, FN_HDP_BUCKET_COUNTS, bucketCounts);
+            ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
 
-        // Fix: Exemplar 인코딩 (이전 코드: 수집은 했으나 OTLP 출력에서 누락)
-        List<Exemplar> exemplars = hp.getExemplars();
-        if (exemplars != null) {
-            for (Exemplar ex : exemplars) {
-                if (ex != null) ProtoEncoder.writeMessage(out, FN_HDP_EXEMPLARS, encodeExemplar(ex));
+            List<Exemplar> exemplars = hp.getExemplars();
+            if (exemplars != null) {
+                for (Exemplar ex : exemplars) {
+                    if (ex != null) ProtoEncoder.writeMessage(out, FN_HDP_EXEMPLARS, encodeExemplar(ex));
+                }
             }
-        }
 
-        if (hp.getMin() != 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MIN, hp.getMin());
-        if (hp.getMax() != 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MAX, hp.getMax());
-        return out.toByteArray();
+            if (hp.getMin() != 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MIN, hp.getMin());
+            if (hp.getMax() != 0) ProtoEncoder.writeDoubleField(out, FN_HDP_MAX, hp.getMax());
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
+        }
     }
 
     private static byte[] encodeExemplar(Exemplar ex) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
-        // filtered_attributes
-        Map<String, String> filteredAttrs = ex.getFilteredAttributes();
-        if (filteredAttrs != null && !filteredAttrs.isEmpty()) {
-            for (Map.Entry<String, String> e : filteredAttrs.entrySet())
-                ProtoEncoder.writeMessage(out, FN_EX_FILTERED_ATTRS, encodeStringKV(e.getKey(), e.getValue()));
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            Map<String, String> filteredAttrs = ex.getFilteredAttributes();
+            if (filteredAttrs != null && !filteredAttrs.isEmpty()) {
+                for (Map.Entry<String, String> e : filteredAttrs.entrySet())
+                    ProtoEncoder.writeMessage(out, FN_EX_FILTERED_ATTRS, encodeStringKV(e.getKey(), e.getValue()));
+            }
+            ProtoEncoder.writeFixed64Field(out, FN_EX_TIME_NS, ex.getTimeUnixNano());
+            ProtoEncoder.writeDoubleField(out, FN_EX_AS_DOUBLE, ex.getValue());
+            byte[] spanId = ProtoEncoder.hexToBytes(ex.getSpanId());
+            if (spanId != null) ProtoEncoder.writeBytes(out, FN_EX_SPAN_ID, spanId);
+            byte[] traceId = ProtoEncoder.hexToBytes(ex.getTraceId());
+            if (traceId != null) ProtoEncoder.writeBytes(out, FN_EX_TRACE_ID, traceId);
+            // flags: SpanFlags (uint32, varint) — OTel Collector/Grafana Mimir가 trace 링크 검증에 사용
+            int flags = ex.getTraceFlags() & 0xFF;
+            if (flags != 0) ProtoEncoder.writeVarint32(out, FN_EX_FLAGS, flags);
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        ProtoEncoder.writeFixed64Field(out, FN_EX_TIME_NS, ex.getTimeUnixNano());
-        ProtoEncoder.writeDoubleField(out, FN_EX_AS_DOUBLE, ex.getValue());
-        byte[] spanId = ProtoEncoder.hexToBytes(ex.getSpanId());
-        if (spanId != null) ProtoEncoder.writeBytes(out, FN_EX_SPAN_ID, spanId);
-        byte[] traceId = ProtoEncoder.hexToBytes(ex.getTraceId());
-        if (traceId != null) ProtoEncoder.writeBytes(out, FN_EX_TRACE_ID, traceId);
-        // flags: SpanFlags (uint32, varint) — OTel Collector/Grafana Mimir가 trace 링크 검증에 사용
-        int flags = ex.getTraceFlags() & 0xFF;
-        if (flags != 0) ProtoEncoder.writeVarint32(out, FN_EX_FLAGS, flags);
-        return out.toByteArray();
     }
 
     private static byte[] encodeNumberDataPoint(MetricData.Point point, long startTimeNs) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
-        encodeAttrs(out, FN_NDP_ATTRS, point.getAttributes(), point.getTypedAttributes());
-        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_NDP_START_TIME_NS, startTimeNs);
-        if (point.getTimestamp() != null) {
-            long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
-            ProtoEncoder.writeFixed64Field(out, FN_NDP_TIME_NS, nanos);
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            encodeAttrs(out, FN_NDP_ATTRS, point.getAttributes(), point.getTypedAttributes());
+            if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_NDP_START_TIME_NS, startTimeNs);
+            if (point.getTimestamp() != null) {
+                long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
+                ProtoEncoder.writeFixed64Field(out, FN_NDP_TIME_NS, nanos);
+            }
+            ProtoEncoder.writeDoubleField(out, FN_NDP_AS_DOUBLE, point.getValue());
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        ProtoEncoder.writeDoubleField(out, FN_NDP_AS_DOUBLE, point.getValue());
-        return out.toByteArray();
     }
 
     private static byte[] encodeHistogramDataPointSimple(MetricData.Point point, long startTimeNs) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(80);
-        encodeAttrs(out, FN_HDP_ATTRS, point.getAttributes(), point.getTypedAttributes());
-        if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
-        if (point.getTimestamp() != null) {
-            long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
-            ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            encodeAttrs(out, FN_HDP_ATTRS, point.getAttributes(), point.getTypedAttributes());
+            if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
+            if (point.getTimestamp() != null) {
+                long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
+                ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
+            }
+            ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, 1L);
+            ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, 1L);
-        ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
-        return out.toByteArray();
     }
 
     private static void encodePointAttributes(ByteArrayOutputStream out, int fieldNumber, Map<String, String> attrs) {
@@ -471,94 +517,116 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
      * oneof 값이 0/false여도 타입 구분을 위해 항상 태그를 기록한다.
      */
     private static byte[] encodeTypedKV(String key, Object value) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + 16);
-        ProtoEncoder.writeString(out, FN_KV_KEY, key);
-        ByteArrayOutputStream av = new ByteArrayOutputStream(16);
-        if (value instanceof Boolean) {
-            ProtoEncoder.writeTag(av, FN_AV_BOOL, ProtoEncoder.WIRE_VARINT);
-            ProtoEncoder.writeRawVarint32(av, ((Boolean) value) ? 1 : 0);
-        } else if (value instanceof Long) {
-            ProtoEncoder.writeTag(av, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
-            ProtoEncoder.writeRawVarint64(av, (Long) value);
-        } else if (value instanceof Integer) {
-            ProtoEncoder.writeTag(av, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
-            ProtoEncoder.writeRawVarint64(av, (long) (int) (Integer) value);
-        } else if (value instanceof Double) {
-            ProtoEncoder.writeTag(av, FN_AV_DOUBLE, ProtoEncoder.WIRE_64BIT);
-            ProtoEncoder.writeDouble(av, (Double) value);
-        } else if (value instanceof Float) {
-            ProtoEncoder.writeTag(av, FN_AV_DOUBLE, ProtoEncoder.WIRE_64BIT);
-            ProtoEncoder.writeDouble(av, (double) (float) (Float) value);
-        } else {
-            ProtoEncoder.writeStringAlways(av, FN_AV_STRING, value != null ? value.toString() : "");
+        ByteArrayOutputStream out = borrowOut();
+        ByteArrayOutputStream av  = borrowOut();
+        try {
+            ProtoEncoder.writeString(out, FN_KV_KEY, key);
+            if (value instanceof Boolean) {
+                ProtoEncoder.writeTag(av, FN_AV_BOOL, ProtoEncoder.WIRE_VARINT);
+                ProtoEncoder.writeRawVarint32(av, ((Boolean) value) ? 1 : 0);
+            } else if (value instanceof Long) {
+                ProtoEncoder.writeTag(av, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
+                ProtoEncoder.writeRawVarint64(av, (Long) value);
+            } else if (value instanceof Integer) {
+                ProtoEncoder.writeTag(av, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
+                ProtoEncoder.writeRawVarint64(av, (long) (int) (Integer) value);
+            } else if (value instanceof Double) {
+                ProtoEncoder.writeTag(av, FN_AV_DOUBLE, ProtoEncoder.WIRE_64BIT);
+                ProtoEncoder.writeDouble(av, (Double) value);
+            } else if (value instanceof Float) {
+                ProtoEncoder.writeTag(av, FN_AV_DOUBLE, ProtoEncoder.WIRE_64BIT);
+                ProtoEncoder.writeDouble(av, (double) (float) (Float) value);
+            } else {
+                ProtoEncoder.writeStringAlways(av, FN_AV_STRING, value != null ? value.toString() : "");
+            }
+            ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
+            return out.toByteArray();
+        } finally {
+            returnOut(av);
+            returnOut(out);
         }
-        ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
-        return out.toByteArray();
     }
 
     private static byte[] encodeStringKV(String key, String value) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + (value != null ? value.length() : 0) + 8);
-        ProtoEncoder.writeString(out, FN_KV_KEY, key);
-        ByteArrayOutputStream av = new ByteArrayOutputStream((value != null ? value.length() : 0) + 4);
-        ProtoEncoder.writeString(av, FN_AV_STRING, value != null ? value : "");
-        ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
-        return out.toByteArray();
+        ByteArrayOutputStream out = borrowOut();
+        ByteArrayOutputStream av  = borrowOut();
+        try {
+            ProtoEncoder.writeString(out, FN_KV_KEY, key);
+            ProtoEncoder.writeString(av, FN_AV_STRING, value != null ? value : "");
+            ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
+            return out.toByteArray();
+        } finally {
+            returnOut(av);
+            returnOut(out);
+        }
     }
 
-    // ---- ExponentialHistogram 인코딩 (Item 6) ----
+    // ---- ExponentialHistogram 인코딩 ----
 
     private static byte[] encodeExponentialHistogram(MetricData metric) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        Collection<MetricData.ExponentialHistogramPoint> pts = metric.getExponentialHistogramPoints();
-        if (pts != null) {
-            for (MetricData.ExponentialHistogramPoint p : pts)
-                ProtoEncoder.writeMessage(out, FN_EH_DATA_POINTS, encodeExpHistogramDataPoint(p));
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            Collection<MetricData.ExponentialHistogramPoint> pts = metric.getExponentialHistogramPoints();
+            if (pts != null) {
+                for (MetricData.ExponentialHistogramPoint p : pts)
+                    ProtoEncoder.writeMessage(out, FN_EH_DATA_POINTS, encodeExpHistogramDataPoint(p));
+            }
+            ProtoEncoder.writeVarint32(out, FN_EH_TEMPORALITY, TEMPORALITY_CUMULATIVE);
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
         }
-        ProtoEncoder.writeVarint32(out, FN_EH_TEMPORALITY, TEMPORALITY_CUMULATIVE);
-        return out.toByteArray();
     }
 
     private static byte[] encodeExpHistogramDataPoint(MetricData.ExponentialHistogramPoint p) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        encodePointAttributes(out, FN_EHP_ATTRS, p.getAttributes());
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            encodePointAttributes(out, FN_EHP_ATTRS, p.getAttributes());
 
-        long timeNs = p.getTimestamp() != null
-                ? p.getTimestamp().getEpochSecond() * 1_000_000_000L + p.getTimestamp().getNano()
-                : 0L;
-        if (timeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_EHP_TIME, timeNs);
+            long timeNs = p.getTimestamp() != null
+                    ? p.getTimestamp().getEpochSecond() * 1_000_000_000L + p.getTimestamp().getNano()
+                    : 0L;
+            if (timeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_EHP_TIME, timeNs);
 
-        ProtoEncoder.writeUint64Field(out, FN_EHP_COUNT, p.getCount());
-        // sum은 optional — 수집 안 된 경우(NaN 등) 기록하지 않는다
-        double sum = p.getSum();
-        if (Double.isFinite(sum) && sum != 0.0)
-            ProtoEncoder.writeDoubleField(out, FN_EHP_SUM, sum);
+            ProtoEncoder.writeUint64Field(out, FN_EHP_COUNT, p.getCount());
+            // sum은 optional — 수집 안 된 경우(NaN 등) 기록하지 않는다
+            double sum = p.getSum();
+            if (Double.isFinite(sum) && sum != 0.0)
+                ProtoEncoder.writeDoubleField(out, FN_EHP_SUM, sum);
 
-        ProtoEncoder.writeSint32Field(out, FN_EHP_SCALE, p.getScale());
-        ProtoEncoder.writeUint64Field(out, FN_EHP_ZERO_COUNT, p.getZeroCount());
+            ProtoEncoder.writeSint32Field(out, FN_EHP_SCALE, p.getScale());
+            ProtoEncoder.writeUint64Field(out, FN_EHP_ZERO_COUNT, p.getZeroCount());
 
-        if (p.getPositiveBucketCounts() != null && p.getPositiveBucketCounts().length > 0)
-            ProtoEncoder.writeMessage(out, FN_EHP_POSITIVE,
-                    encodeBuckets(p.getPositiveOffset(), p.getPositiveBucketCounts()));
-        if (p.getNegativeBucketCounts() != null && p.getNegativeBucketCounts().length > 0)
-            ProtoEncoder.writeMessage(out, FN_EHP_NEGATIVE,
-                    encodeBuckets(p.getNegativeOffset(), p.getNegativeBucketCounts()));
+            if (p.getPositiveBucketCounts() != null && p.getPositiveBucketCounts().length > 0)
+                ProtoEncoder.writeMessage(out, FN_EHP_POSITIVE,
+                        encodeBuckets(p.getPositiveOffset(), p.getPositiveBucketCounts()));
+            if (p.getNegativeBucketCounts() != null && p.getNegativeBucketCounts().length > 0)
+                ProtoEncoder.writeMessage(out, FN_EHP_NEGATIVE,
+                        encodeBuckets(p.getNegativeOffset(), p.getNegativeBucketCounts()));
 
-        for (Exemplar ex : p.getExemplars())
-            if (ex != null) ProtoEncoder.writeMessage(out, FN_EHP_EXEMPLARS, encodeExemplar(ex));
+            for (Exemplar ex : p.getExemplars())
+                if (ex != null) ProtoEncoder.writeMessage(out, FN_EHP_EXEMPLARS, encodeExemplar(ex));
 
-        if (Double.isFinite(p.getMin()) && p.getMin() != 0)
-            ProtoEncoder.writeDoubleField(out, FN_EHP_MIN, p.getMin());
-        if (Double.isFinite(p.getMax()) && p.getMax() != 0)
-            ProtoEncoder.writeDoubleField(out, FN_EHP_MAX, p.getMax());
+            if (Double.isFinite(p.getMin()) && p.getMin() != 0)
+                ProtoEncoder.writeDoubleField(out, FN_EHP_MIN, p.getMin());
+            if (Double.isFinite(p.getMax()) && p.getMax() != 0)
+                ProtoEncoder.writeDoubleField(out, FN_EHP_MAX, p.getMax());
 
-        return out.toByteArray();
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
+        }
     }
 
     private static byte[] encodeBuckets(int offset, long[] counts) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(counts.length * 4 + 4);
-        ProtoEncoder.writeSint32Field(out, FN_BUCKETS_OFFSET, offset);
-        ProtoEncoder.writePackedUint64(out, FN_BUCKETS_COUNTS, counts);
-        return out.toByteArray();
+        ByteArrayOutputStream out = borrowOut();
+        try {
+            ProtoEncoder.writeSint32Field(out, FN_BUCKETS_OFFSET, offset);
+            ProtoEncoder.writePackedUint64(out, FN_BUCKETS_COUNTS, counts);
+            return out.toByteArray();
+        } finally {
+            returnOut(out);
+        }
     }
 
     private static String resolveServiceName() {

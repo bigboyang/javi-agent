@@ -17,6 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -130,7 +131,7 @@ public final class OtlpHttpProtobufSender {
         if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
         if (attempt >= MAX_ATTEMPTS) { onSendFailure(path); resultFuture.complete(SendResult.FAILURE); return; }
 
-        long jitter = attempt > 0 ? (long) (Math.random() * 500L) : 0L;
+        long jitter = ThreadLocalRandom.current().nextLong(100L * (1L << attempt));
         long delayMs = RETRY_BACKOFF_MS[attempt] + jitter;
         retryScheduler.schedule(() -> {
             if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
