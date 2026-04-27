@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.span.Span;
 import com.agent.span.SpanKind;
 import com.agent.trace.Tracer;
@@ -27,7 +28,7 @@ public final class JavaHttpClientAdvice {
                 .startSpan();
 
         span.setAttribute("http.request.method", method);
-        span.setAttribute("url.full", request.uri().toString());
+        span.setAttribute("url.full", UrlSanitizer.sanitize(request.uri().toString()));
 
         // Java 11 HttpClient은 HttpRequest가 Immutable하므로, 
         // 전파를 위해서는 Builder를 가로채거나 내부의 헤더 필드를 Reflection으로 수정해야 함.

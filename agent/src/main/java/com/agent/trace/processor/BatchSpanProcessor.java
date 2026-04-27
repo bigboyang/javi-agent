@@ -3,6 +3,7 @@ package com.agent.trace.processor;
 import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.logs.AgentLogger;
 import com.agent.metric.Counter;
+import com.agent.metric.ExplicitBucketHistogram;
 import com.agent.metric.Gauge;
 import com.agent.metric.MetricRegistry;
 import com.agent.span.Span;
@@ -36,10 +37,11 @@ public final class BatchSpanProcessor implements SpanProcessor {
     private final LinkedBlockingQueue<CountDownLatch> flushRequests = new LinkedBlockingQueue<>();
 
     // ---- Backpressure 메트릭 ----
-    private final Gauge   queueSizeGauge;
-    private final Gauge   queueUtilizationGauge;
-    private final Counter droppedCounter;
-    private final Counter exportedCounter;
+    private final Gauge                   queueSizeGauge;
+    private final Gauge                   queueUtilizationGauge;
+    private final Counter                 droppedCounter;
+    private final Counter                 exportedCounter;
+    private final ExplicitBucketHistogram exportLatencyHistogram;
 
     public BatchSpanProcessor(SpanExporter exporter, int maxQueueSize, int maxBatchSize, long delayMillis) {
         this.exporter      = exporter;
@@ -54,6 +56,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
         this.queueUtilizationGauge = reg.gauge("javi.pipeline.queue.utilization", Collections.emptyMap());
         this.droppedCounter        = reg.counter("javi.pipeline.spans.dropped",   Collections.emptyMap());
         this.exportedCounter       = reg.counter("javi.pipeline.spans.exported",  Collections.emptyMap());
+        this.exportLatencyHistogram = reg.histogram("javi.pipeline.export.latency", "", "ms", Collections.emptyMap());
 
         // 큐 최대 용량은 상수 — Gauge로 한 번 기록
         reg.gauge("javi.pipeline.queue.capacity", Collections.emptyMap()).set(maxQueueSize);
@@ -222,6 +225,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
             int retries = 0;
             int maxRetries = com.agent.config.RemoteConfigHolder.get().getRetryCount();
             long backoffMs = 1000; // 시작 대기 시간 1초
+            long startMs   = System.currentTimeMillis();
 
             while (true) {
                 try {
@@ -229,6 +233,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
                     if (result.isSuccess()) {
                         exportedSpans.addAndGet(batchSize);
                         exportedCounter.add(batchSize);
+                        exportLatencyHistogram.record(System.currentTimeMillis() - startMs);
                         return;
                     }
                     // 실패 시 아래 catch 블록과 동일한 재시도 로직 수행
@@ -250,6 +255,7 @@ public final class BatchSpanProcessor implements SpanProcessor {
                     AgentLogger.error("[BatchSpanProcessor] Export failed after " + retries + " retries. Dropping " + batchSize + " spans.");
                     droppedSpans.addAndGet(batchSize);
                     droppedCounter.add(batchSize);
+                    exportLatencyHistogram.record(System.currentTimeMillis() - startMs);
                     break;
                 }
             }

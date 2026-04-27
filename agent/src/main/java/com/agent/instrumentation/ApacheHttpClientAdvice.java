@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.span.Span;
 import com.agent.span.SpanKind;
 import com.agent.trace.Tracer;
@@ -39,7 +40,7 @@ public final class ApacheHttpClientAdvice {
                 .startSpan();
 
         span.setAttribute("http.request.method", method);
-        span.setAttribute("url.full", host + uri);
+        span.setAttribute("url.full", UrlSanitizer.sanitize(host + uri));
 
         // 컨텍스트 전파 (Injection: TraceContext & Baggage)
         try {

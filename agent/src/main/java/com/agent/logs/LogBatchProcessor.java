@@ -1,7 +1,11 @@
 package com.agent.logs;
 
 import com.agent.common.DataExporter;
+import com.agent.metric.Counter;
+import com.agent.metric.Gauge;
+import com.agent.metric.MetricRegistry;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -17,15 +21,30 @@ public final class LogBatchProcessor {
     private final BlockingQueue<LogRecord> queue;
     private final DataExporter<LogRecord> exporter;
     private final int maxBatchSize;
+    private final int maxQueueSize;
     private final long exportIntervalMs;
     private final Thread workerThread;
     private final AtomicBoolean isStopped = new AtomicBoolean(false);
 
+    // Self-telemetry metrics
+    private final Gauge   queueSizeGauge;
+    private final Gauge   queueUtilizationGauge;
+    private final Counter droppedCounter;
+    private final Counter exportedCounter;
+
     public LogBatchProcessor(DataExporter<LogRecord> exporter, int maxQueueSize, int maxBatchSize, long exportIntervalMs) {
         this.exporter = exporter;
         this.maxBatchSize = maxBatchSize;
+        this.maxQueueSize = maxQueueSize;
         this.exportIntervalMs = exportIntervalMs;
         this.queue = new ArrayBlockingQueue<>(maxQueueSize);
+
+        MetricRegistry reg = MetricRegistry.get();
+        this.queueSizeGauge        = reg.gauge("javi.logs.pipeline.queue.size",        Collections.emptyMap());
+        this.queueUtilizationGauge = reg.gauge("javi.logs.pipeline.queue.utilization", Collections.emptyMap());
+        this.droppedCounter        = reg.counter("javi.logs.pipeline.dropped",          Collections.emptyMap());
+        this.exportedCounter       = reg.counter("javi.logs.pipeline.exported",         Collections.emptyMap());
+        reg.gauge("javi.logs.pipeline.queue.capacity", Collections.emptyMap()).set(maxQueueSize);
 
         this.workerThread = new Thread(new Worker(), "javi-log-processor");
         this.workerThread.setDaemon(true);
@@ -38,11 +57,14 @@ public final class LogBatchProcessor {
         
         // Backpressure: 큐 임계치 초과 시 폐기 (Drop-newest 전략)
         if (!queue.offer(record)) {
-            // 원격 설정에서 dropOnFull이 true이면 경고 없이 버리고, false면 로그를 남김 (거버넌스 연동)
+            droppedCounter.increment();
             if (!com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
                 AgentLogger.warn("[LogProcessor] Backpressure: 큐 임계치 초과 — 로그 데이터 폐기 (size=" + queue.size() + ")");
             }
         }
+        int qs = queue.size();
+        queueSizeGauge.set(qs);
+        queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
     }
 
     public CompletableFuture<Void> shutdown() {
@@ -82,8 +104,13 @@ public final class LogBatchProcessor {
                     if (firstItem != null) {
                         batch.add(firstItem);
                         queue.drainTo(batch, maxBatchSize - 1);
+                        int batchSize = batch.size();
                         exporter.export(new ArrayList<>(batch));
+                        exportedCounter.add(batchSize);
                         batch.clear();
+                        int qs = queue.size();
+                        queueSizeGauge.set(qs);
+                        queueUtilizationGauge.set(maxQueueSize > 0 ? qs * 100L / maxQueueSize : 0);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

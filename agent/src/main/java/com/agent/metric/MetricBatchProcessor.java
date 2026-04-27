@@ -4,6 +4,7 @@ import com.agent.common.DataExporter;
 import com.agent.logs.AgentLogger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -57,6 +58,11 @@ public final class MetricBatchProcessor {
     private final AtomicLong totalDropped       = new AtomicLong(0);
     private final AtomicLong permitWaitTimeouts = new AtomicLong(0);
 
+    // MetricRegistry self-telemetry
+    private final Counter  droppedCounter;
+    private final Counter  permitTimeoutCounter;
+    private final Gauge    queueSizeGauge;
+
     public MetricBatchProcessor(DataExporter<MetricData> exporter,
                                  int maxQueueSize,
                                  int maxBatchSize,
@@ -65,6 +71,12 @@ public final class MetricBatchProcessor {
         this.maxBatchSize     = maxBatchSize;
         this.exportIntervalMs = exportIntervalMs;
         this.queue            = new ArrayBlockingQueue<>(maxQueueSize);
+
+        MetricRegistry reg = MetricRegistry.get();
+        this.droppedCounter       = reg.counter("javi.metrics.processor.dropped",        Collections.emptyMap());
+        this.permitTimeoutCounter = reg.counter("javi.metrics.processor.permit_timeouts", Collections.emptyMap());
+        this.queueSizeGauge       = reg.gauge("javi.metrics.processor.queue.size",        Collections.emptyMap());
+        reg.gauge("javi.metrics.processor.queue.capacity", Collections.emptyMap()).set(maxQueueSize);
 
         this.workerThread = new Thread(new Worker(), "javi-metric-processor");
         this.workerThread.setDaemon(true);
@@ -79,11 +91,13 @@ public final class MetricBatchProcessor {
 
         if (!queue.offer(record)) {
             totalDropped.incrementAndGet();
+            droppedCounter.increment();
             if (!com.agent.config.RemoteConfigHolder.get().isDropOnFull()) {
                 AgentLogger.warn("[MetricProcessor] Backpressure: 큐가 가득 참 — 메트릭 데이터 폐기"
                         + " (size=" + queue.size() + " total_dropped=" + totalDropped.get() + ")");
             }
         }
+        queueSizeGauge.set(queue.size());
     }
 
     public CompletableFuture<Void> shutdown() {
@@ -137,6 +151,7 @@ public final class MetricBatchProcessor {
                     // permit 획득 실패(타임아웃) 시 배치를 큐에 재삽입하고 다음 루프로 넘어간다.
                     if (!exportPermits.tryAcquire(exportIntervalMs, TimeUnit.MILLISECONDS)) {
                         permitWaitTimeouts.incrementAndGet();
+                        permitTimeoutCounter.increment();
                         AgentLogger.warn("[MetricProcessor] export permit 획득 타임아웃"
                                 + " — in-flight=" + (MAX_CONCURRENT_EXPORTS - exportPermits.availablePermits())
                                 + " permit_timeouts=" + permitWaitTimeouts.get());
@@ -150,6 +165,7 @@ public final class MetricBatchProcessor {
                     final List<MetricData> exportBatch = new ArrayList<>(batch);
                     batch.clear();
 
+                    queueSizeGauge.set(queue.size());
                     exporter.export(exportBatch)
                             .whenComplete((v, ex) -> {
                                 // 성공/실패 무관하게 항상 permit 반환

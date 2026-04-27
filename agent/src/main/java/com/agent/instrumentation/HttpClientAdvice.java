@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
@@ -46,7 +47,7 @@ public final class HttpClientAdvice {
 
         span.setAttribute("http.request.method", method);
         if (url != null) {
-            span.setAttribute("url.full", url.toString());
+            span.setAttribute("url.full", UrlSanitizer.sanitize(url.toString()));
             span.setAttribute("server.address", url.getHost());
             if (url.getPort() > 0) {
                 span.setAttribute("server.port", (long) url.getPort());
