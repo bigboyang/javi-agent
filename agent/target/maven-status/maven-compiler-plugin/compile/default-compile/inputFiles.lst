@@ -74,7 +74,6 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/SpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/NoopSpan.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/CompositeSpanExporter.java
-/Users/kkc/APM/agent/src/main/java/com/agent/trace/processor/SimpleSpanProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfigValidator.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JavaHttpClientAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/SystemClock.java

@@ -8,7 +8,6 @@ import com.agent.span.SpanLimits;
 import com.agent.trace.processor.NoopSpanProcessor;
 import com.agent.trace.processor.BatchSpanProcessor;
 import com.agent.trace.processor.CompositeSpanProcessor;
-import com.agent.trace.processor.SimpleSpanProcessor;
 import com.agent.trace.processor.SpanProcessor;
 import com.agent.trace.exporter.SpanExporter;
 import java.util.ArrayList;
@@ -123,10 +122,6 @@ public class SdkTracerProvider implements TracerProvider {
         synchronized (spanProcessors) {
             return Collections.unmodifiableList(new ArrayList<>(spanProcessors));
         }
-    }
-
-    public void addSimpleSpanProcessor(SpanExporter exporter) {
-        addSpanProcessor(new SimpleSpanProcessor(exporter));
     }
 
     public void addBatchSpanProcessor(SpanExporter exporter, int maxQueueSize, int maxBatchSize, long delayMillis) {

@@ -123,7 +123,6 @@ com/agent/metric/ExplicitBucketHistogram.class
 com/agent/instrumentation/JavaHttpClientAdvice.class
 com/agent/instrumentation/AgentRuntime.class
 com/agent/metric/MetricKey.class
-com/agent/trace/processor/SimpleSpanProcessor.class
 com/agent/instrumentation/ElasticsearchAdvice$State.class
 com/agent/trace/TraceId.class
 com/agent/common/utils/generator/IdGenerator.class

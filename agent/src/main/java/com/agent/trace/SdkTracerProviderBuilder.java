@@ -6,7 +6,6 @@ import com.agent.sampler.Sampler;
 import com.agent.span.SpanLimits;
 import com.agent.trace.exporter.SpanExporter;
 import com.agent.trace.processor.BatchSpanProcessor;
-import com.agent.trace.processor.SimpleSpanProcessor;
 import com.agent.trace.processor.SpanProcessor;
 
 import java.util.ArrayList;
@@ -63,10 +62,6 @@ public final class SdkTracerProviderBuilder {
             this.spanProcessors.add(processor);
         }
         return this;
-    }
-
-    public SdkTracerProviderBuilder addSimpleSpanProcessor(SpanExporter exporter) {
-        return addSpanProcessor(new SimpleSpanProcessor(exporter));
     }
 
     public SdkTracerProviderBuilder addBatchSpanProcessor(
