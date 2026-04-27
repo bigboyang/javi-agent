@@ -9,10 +9,11 @@ import com.agent.logs.AgentLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -90,7 +91,15 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
 
     // ---- DELTA histogram 상태 추적 ----
     // key: "metricName|attrsKey" → 이전 export 시점의 누적값
-    private final ConcurrentHashMap<String, HistogramState> histogramStates = new ConcurrentHashMap<>();
+    // LRU 제한: 동적 레이블 환경에서 메모리 무한 증가를 방지한다.
+    private static final int MAX_HISTOGRAM_STATES = 1_000;
+    private final Map<String, HistogramState> histogramStates = Collections.synchronizedMap(
+            new LinkedHashMap<String, HistogramState>(256, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, HistogramState> eldest) {
+                    return size() > MAX_HISTOGRAM_STATES;
+                }
+            });
 
     private static final class HistogramState {
         final long   count;
@@ -130,22 +139,26 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
         for (MetricData m : metrics) {
             if (m != null && m.getPoints() != null) totalPoints += m.getPoints().size();
         }
+        final int points = totalPoints;
 
+        byte[] protoBytes;
         try {
-            byte[] protoBytes = buildExportBytes(metrics);
-            SendResult result = sender.send(METRIC_PATH, protoBytes);
-
-            if (result == SendResult.SUCCESS) {
-                exportedPoints.addAndGet(totalPoints);
-            } else {
-                droppedPoints.addAndGet(totalPoints);
-                failedBatches.incrementAndGet();
-            }
+            protoBytes = buildExportBytes(metrics);
         } catch (Exception e) {
             AgentLogger.warn("OtlpHttpMetricExporter: 인코딩 오류 — " + e.getMessage());
-            droppedPoints.addAndGet(totalPoints);
+            droppedPoints.addAndGet(points);
+            return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.completedFuture(null);
+
+        return sender.sendAsync(METRIC_PATH, protoBytes)
+                .thenAccept(result -> {
+                    if (result == SendResult.SUCCESS) {
+                        exportedPoints.addAndGet(points);
+                    } else {
+                        droppedPoints.addAndGet(points);
+                        failedBatches.incrementAndGet();
+                    }
+                });
     }
 
     @Override
