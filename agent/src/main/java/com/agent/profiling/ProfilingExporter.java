@@ -13,29 +13,32 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Continuous Profiling Exporter (GAP-07).
  *
- * <p>CPU 프로파일링 스냅샷을 수집하여 {@code POST /api/collector/profiling}으로 전송한다.
+ * <p>CPU 프로파일링 스냅샷을 수집하여 전송한다.
  *
- * <p>백엔드 우선순위 (자동 감지):
- * <ol>
- *   <li>{@link AsyncProfilerBackend} — async-profiler JAR이 클래스패스에 있거나
- *       {@code -agentpath:libasyncProfiler.so}로 로드된 경우. Linux perf_events 기반,
- *       safepoint 편향 없음, 네이티브 프레임 포함.</li>
- *   <li>{@link JfrProfilerBackend} — JDK 11+ Flight Recorder 사용. 낮은 오버헤드,
- *       JVM 내부 프레임 가시화.</li>
- *   <li>{@link ThreadSamplingBackend} — ThreadMXBean 기반 폴백. 외부 의존성 없음.</li>
- * </ol>
+ * <p>포맷 선택 ({@code JAVI_PROFILING_FORMAT}):
+ * <ul>
+ *   <li>{@code collapsed} (기본) — JSON payload, {@code POST /api/collector/profiling}</li>
+ *   <li>{@code pprof}     — gzip-compressed pprof protobuf, {@code JAVI_PROFILING_PPROF_ENDPOINT}</li>
+ * </ul>
+ *
+ * <p>재시도: 5xx/네트워크 오류 시 최대 {@value #MAX_ATTEMPTS}회, 지수 백오프.
+ * 4xx는 재시도 없이 즉시 실패.
  *
  * <p>환경변수:
  * <ul>
- *   <li>{@code JAVI_PROFILING_API} — 컬렉터 API 기본 URL (기본: http://localhost:8080)</li>
- *   <li>{@code JAVI_PROFILING_ENABLED} — "false"이면 비활성화 (기본: true)</li>
+ *   <li>{@code JAVI_PROFILING_API}                — 컬렉터 API 기본 URL (기본: http://localhost:8080)</li>
+ *   <li>{@code JAVI_PROFILING_ENABLED}            — "false"이면 비활성화</li>
  *   <li>{@code JAVI_PROFILING_SAMPLE_DURATION_MS} — 1회 수집 시간 ms (기본: 10000)</li>
  *   <li>{@code JAVI_PROFILING_SAMPLE_INTERVAL_MS} — 샘플 간격 ms (기본: 10)</li>
+ *   <li>{@code JAVI_PROFILING_FORMAT}             — "collapsed" | "pprof" (기본: collapsed)</li>
+ *   <li>{@code JAVI_PROFILING_PPROF_ENDPOINT}     — pprof 전송 엔드포인트 URL</li>
  * </ul>
  */
 public final class ProfilingExporter {
@@ -44,10 +47,15 @@ public final class ProfilingExporter {
     private static final String ENV_ENABLED     = "JAVI_PROFILING_ENABLED";
     private static final String ENV_DURATION_MS = "JAVI_PROFILING_SAMPLE_DURATION_MS";
     private static final String ENV_INTERVAL_MS = "JAVI_PROFILING_SAMPLE_INTERVAL_MS";
+    private static final String ENV_FORMAT      = "JAVI_PROFILING_FORMAT";
+    private static final String ENV_PPROF_EP    = "JAVI_PROFILING_PPROF_ENDPOINT";
 
-    private static final String PROFILING_PATH      = "/api/collector/profiling";
+    private static final String PROFILING_PATH       = "/api/collector/profiling";
     private static final long   DEFAULT_DURATION_MS  = 10_000L;
     private static final long   DEFAULT_INTERVAL_MS  = 10L;
+
+    private static final int    MAX_ATTEMPTS        = 3;
+    private static final long[] RETRY_BACKOFF_MS    = {0L, 1_000L, 2_000L};
 
     private final String        collectorApiBase;
     private final long          sampleDurationMs;
@@ -60,6 +68,14 @@ public final class ProfilingExporter {
     private final HttpClient    httpClient;
     private final AtomicBoolean enabled;
     private final ProfilerBackend backend;
+    private final boolean       pprofEnabled;
+    private final String        pprofEndpoint;
+
+    private final ScheduledExecutorService retryScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "javi-profiling-retry");
+        t.setDaemon(true);
+        return t;
+    });
 
     public ProfilingExporter() {
         Map<String, String> resource = ResourceInfo.getAttributes();
@@ -78,6 +94,10 @@ public final class ProfilingExporter {
         this.enabled = new AtomicBoolean(!"false".equalsIgnoreCase(enabledVal));
 
         this.backend = selectBackend();
+
+        String fmt = System.getenv(ENV_FORMAT);
+        this.pprofEnabled = "pprof".equalsIgnoreCase(fmt);
+        this.pprofEndpoint = resolvePprofEndpoint();
 
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -118,12 +138,24 @@ public final class ProfilingExporter {
         }
 
         if (!cpuStacks.isEmpty()) {
-            sendSnapshot(UUID.randomUUID().toString(), buildCollapsedPayload(cpuStacks),
-                    "cpu", "collapsed", durationMs, cpuStacks.size());
+            String id = UUID.randomUUID().toString();
+            if (pprofEnabled) {
+                byte[] pprofBytes = PprofEncoder.encode(cpuStacks, "cpu", durationMs, sampleIntervalMs);
+                sendPprof(id, pprofBytes);
+            } else {
+                sendSnapshot(id, buildCollapsedPayload(cpuStacks), "cpu", "collapsed",
+                        durationMs, cpuStacks.size());
+            }
         }
         if (!allocStacks.isEmpty()) {
-            sendSnapshot(UUID.randomUUID().toString(), buildCollapsedPayload(allocStacks),
-                    "alloc", "collapsed", durationMs, allocStacks.size());
+            String id = UUID.randomUUID().toString();
+            if (pprofEnabled) {
+                byte[] pprofBytes = PprofEncoder.encode(allocStacks, "alloc", durationMs, sampleIntervalMs);
+                sendPprof(id, pprofBytes);
+            } else {
+                sendSnapshot(id, buildCollapsedPayload(allocStacks), "alloc", "collapsed",
+                        durationMs, allocStacks.size());
+            }
         }
     }
 
@@ -134,6 +166,8 @@ public final class ProfilingExporter {
         }
         return sb.toString();
     }
+
+    // ---- collapsed JSON 전송 ----
 
     private void sendSnapshot(String id, String payload, String profileType,
                                String format, long durationMs, int stackCount) {
@@ -152,20 +186,63 @@ public final class ProfilingExporter {
             AgentLogger.warn("[profiling] 요청 생성 실패: " + e.getMessage());
             return;
         }
+        doSend(request, id, 0);
+    }
 
-        httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding())
-                .whenComplete((resp, ex) -> {
-                    if (ex != null) {
-                        AgentLogger.warn("[profiling] 전송 실패: " + ex.getMessage());
-                    } else if (resp.statusCode() >= 400) {
-                        AgentLogger.warn("[profiling] 컬렉터 오류 HTTP " + resp.statusCode());
-                    } else {
-                        AgentLogger.debug("[profiling] 전송 완료 id=" + id
-                                + " backend=" + backend.name()
-                                + " stacks=" + stackCount
-                                + " duration_ms=" + durationMs);
-                    }
-                });
+    // ---- pprof binary 전송 ----
+
+    private void sendPprof(String id, byte[] pprofGzipBytes) {
+        HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder()
+                    .uri(URI.create(pprofEndpoint))
+                    .timeout(Duration.ofSeconds(15))
+                    // pprof 파일은 gzip-compressed protobuf (파일 포맷 수준, Content-Encoding 헤더 없음)
+                    .header("Content-Type", "application/x-protobuf")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(pprofGzipBytes))
+                    .build();
+        } catch (Exception e) {
+            AgentLogger.warn("[profiling] pprof 요청 생성 실패: " + e.getMessage());
+            return;
+        }
+        doSend(request, id, 0);
+    }
+
+    // ---- 재시도 로직 ----
+
+    /**
+     * HTTP 전송 + 재시도. 5xx/네트워크 오류만 재시도, 4xx는 즉시 포기.
+     * 재시도 스케줄링은 retryScheduler 를 사용해 httpClient 스레드를 점유하지 않는다.
+     */
+    private void doSend(HttpRequest request, String id, int attempt) {
+        retryScheduler.schedule(() -> {
+            httpClient.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+                    .whenComplete((resp, ex) -> {
+                        if (ex != null) {
+                            scheduleRetry(request, id, attempt, "네트워크 오류: " + ex.getMessage());
+                        } else if (resp.statusCode() >= 500) {
+                            scheduleRetry(request, id, attempt, "HTTP " + resp.statusCode());
+                        } else if (resp.statusCode() >= 400) {
+                            AgentLogger.warn("[profiling] 컬렉터 오류 HTTP " + resp.statusCode()
+                                    + " id=" + id + " (재시도 없음)");
+                        } else {
+                            AgentLogger.debug("[profiling] 전송 완료 id=" + id
+                                    + " backend=" + backend.name()
+                                    + " attempt=" + attempt);
+                        }
+                    });
+        }, RETRY_BACKOFF_MS[attempt], TimeUnit.MILLISECONDS);
+    }
+
+    private void scheduleRetry(HttpRequest request, String id, int attempt, String reason) {
+        int next = attempt + 1;
+        if (next < MAX_ATTEMPTS) {
+            AgentLogger.debug("[profiling] 재시도 " + next + "/" + (MAX_ATTEMPTS - 1)
+                    + " id=" + id + " cause=" + reason);
+            doSend(request, id, next);
+        } else {
+            AgentLogger.warn("[profiling] 전송 최종 실패 id=" + id + " cause=" + reason);
+        }
     }
 
     private String buildJson(String id, String payload, String profileType,
@@ -196,10 +273,6 @@ public final class ProfilingExporter {
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    /**
-     * 사용 가능한 최적의 프로파일러 백엔드를 선택한다.
-     * async-profiler → JFR → ThreadMXBean 순으로 시도한다.
-     */
     private static ProfilerBackend selectBackend() {
         AsyncProfilerBackend ap = AsyncProfilerBackend.tryCreate();
         if (ap != null) return ap;
@@ -223,6 +296,12 @@ public final class ProfilingExporter {
         } catch (Exception e) {
             return "http://localhost:8080";
         }
+    }
+
+    private static String resolvePprofEndpoint() {
+        String val = System.getenv(ENV_PPROF_EP);
+        if (val != null && !val.isEmpty()) return val;
+        return resolveApiBase() + "/api/collector/profiling/pprof";
     }
 
     private static long parseLong(String envKey, long defaultVal) {

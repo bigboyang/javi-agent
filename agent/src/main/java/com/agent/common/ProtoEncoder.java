@@ -114,6 +114,15 @@ public final class ProtoEncoder {
         writeRawVarint64(out, value);
     }
 
+    /**
+     * sint32 (zigzag-encoded varint) 필드. ExponentialHistogram의 scale, Buckets의 offset 등에 사용.
+     * 0도 유효한 값이므로 반드시 기록한다 (scale=0은 기본 버킷 너비, offset=0은 첫 버킷이 인덱스 0).
+     */
+    public static void writeSint32Field(ByteArrayOutputStream out, int fieldNumber, int value) {
+        writeTag(out, fieldNumber, WIRE_VARINT);
+        writeRawVarint32(out, (value << 1) ^ (value >> 31));
+    }
+
     /** fixed32 (span flags 등) 필드. */
     public static void writeFixed32Field(ByteArrayOutputStream out, int fieldNumber, int value) {
         if (value == 0) return;
