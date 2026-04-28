@@ -47,7 +47,7 @@ public final class JvmMetricsCollector {
     private JvmMetricsCollector() {}
 
     /** JVM 메트릭 수집을 시작한다. 즉시 1회 수집 후 15초 간격으로 반복한다. */
-    public static void start() {
+    public static synchronized void start() {
         if (executor != null) return;
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "javi-jvm-metrics");
@@ -77,11 +77,15 @@ public final class JvmMetricsCollector {
                                 long duration = (long) gcInfo.get("duration");
                                 String gcName = (String) cd.get("gcName");
                                 String gcAction = (String) cd.get("gcAction");
+                                String gcCause = (String) cd.get("gcCause");
 
                                 Map<String, String> tags = new HashMap<>(4);
                                 tags.put("gc", gcName);
                                 tags.put("gc.action", gcAction);
                                 tags.put("gc.type", classifyGc(gcName));
+                                if (gcCause != null && !gcCause.isEmpty()) {
+                                    tags.put("gc.cause", gcCause);
+                                }
 
                                 // 개별 GC pause time을 히스토그램으로 기록 (OTel 표준)
                                 MetricRegistry.get().histogram("jvm.gc.duration", "Duration of JVM garbage collection pauses", "ms", tags)
@@ -225,8 +229,8 @@ public final class JvmMetricsCollector {
             processCpuLoad.setAccessible(true);
             double cpuLoad = (double) processCpuLoad.invoke(os);
             if (cpuLoad >= 0) {
-                MetricRegistry.get().gauge("jvm.cpu.process_load", "Process CPU load", "1", Collections.emptyMap())
-                        .set((long) (cpuLoad * 1000)); // permille (0~1000)
+                MetricRegistry.get().gauge("process.cpu.utilization", "Process CPU utilization (0-100 percent)", "%", Collections.emptyMap())
+                        .set((long) (cpuLoad * 100));
             }
 
             // 시스템 전체 CPU (JDK 14+ getCpuLoad, 이하 getSystemCpuLoad)
@@ -241,8 +245,8 @@ public final class JvmMetricsCollector {
                 systemLoad = (double) getSystemCpuLoad.invoke(os);
             }
             if (systemLoad >= 0) {
-                MetricRegistry.get().gauge("system.cpu.load", "System CPU load", "1", Collections.emptyMap())
-                        .set((long) (systemLoad * 1000));
+                MetricRegistry.get().gauge("system.cpu.utilization", "System CPU utilization (0-100 percent)", "%", Collections.emptyMap())
+                        .set((long) (systemLoad * 100));
             }
         } catch (Throwable ignored) {}
     }

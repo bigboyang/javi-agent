@@ -5,6 +5,7 @@ import java.lang.management.ManagementFactory;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +32,7 @@ import javax.management.ObjectName;
 public final class HikariMetricsCollector {
 
     private static volatile ScheduledExecutorService executor;
+    private static final ConcurrentHashMap<String, Long> lastTimeoutTotal = new ConcurrentHashMap<>();
 
     private HikariMetricsCollector() {}
 
@@ -38,7 +40,7 @@ public final class HikariMetricsCollector {
      * HikariCP 메트릭 수집을 시작한다.
      * 애플리케이션이 초기화된 후 MBean이 등록되므로 초기 딜레이 10초 후 15초 간격으로 수집한다.
      */
-    public static void start() {
+    public static synchronized void start() {
         if (executor != null) return;
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "javi-hikari-metrics");
@@ -104,6 +106,18 @@ public final class HikariMetricsCollector {
             if (idle instanceof Number) reg.gauge("hikaricp.connections.idle", tags).set(((Number) idle).longValue());
             if (pending instanceof Number) reg.gauge("hikaricp.connections.pending", tags).set(((Number) pending).longValue());
             if (total instanceof Number) reg.gauge("hikaricp.connections.total", tags).set(((Number) total).longValue());
+
+            Object timeoutTotal = safeGet(mbs, poolBean, "ConnectionTimeoutTotal");
+            if (timeoutTotal instanceof Number) {
+                String poolKey = tags.get("pool");
+                long current = ((Number) timeoutTotal).longValue();
+                long prev = lastTimeoutTotal.getOrDefault(poolKey, 0L);
+                long delta = Math.max(0L, current - prev);
+                if (delta > 0) {
+                    reg.counter("hikaricp.connections.timeout_total", "Connection acquisition timeout count", "1", tags).add(delta);
+                }
+                lastTimeoutTotal.put(poolKey, current);
+            }
 
             // PoolConfig MBean에서 max/min 읽기
             ObjectName configBean = new ObjectName(

@@ -113,6 +113,7 @@ public final class ExplicitBucketHistogram {
      * </ul>
      */
     public void record(long valueMs) {
+        if (valueMs < 0) return;
         int idx = Arrays.binarySearch(boundaries, valueMs);
         if (idx < 0) idx = -idx - 1;  // 삽입 위치 = 해당 버킷 인덱스
 

@@ -5,6 +5,7 @@ import java.lang.management.ManagementFactory;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -33,9 +34,13 @@ public final class TomcatMetricsCollector {
 
     private static volatile ScheduledExecutorService executor;
 
+    private static final ConcurrentHashMap<String, Long> lastRequestCount   = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> lastErrorCount     = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> lastProcessingTime = new ConcurrentHashMap<>();
+
     private TomcatMetricsCollector() {}
 
-    public static void start() {
+    public static synchronized void start() {
         if (executor != null) return;
         executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "javi-tomcat-metrics");
@@ -62,6 +67,7 @@ public final class TomcatMetricsCollector {
             boolean collected = false;
 
             collected |= collectTomcat(mbs);
+            collectGlobalRequestProcessor(mbs);
             if (!collected) collectJetty(mbs);
 
             MetricRegistry.get().scrapeAndEmit();
@@ -109,6 +115,46 @@ public final class TomcatMetricsCollector {
         }
     }
 
+    /** Catalina:type=GlobalRequestProcessor — request/error count, processing time */
+    private static void collectGlobalRequestProcessor(MBeanServer mbs) {
+        try {
+            Set<ObjectName> beans = mbs.queryNames(
+                    new ObjectName("Catalina:type=GlobalRequestProcessor,name=*"), null);
+            if (beans.isEmpty()) return;
+
+            MetricRegistry reg = MetricRegistry.get();
+            for (ObjectName bean : beans) {
+                String connName = extractConnectorName(bean.getKeyProperty("name"));
+                Map<String, String> tags = attr("connector", connName);
+
+                long reqCount  = toLong(safeGet(mbs, bean, "requestCount"), -1);
+                long errCount  = toLong(safeGet(mbs, bean, "errorCount"), -1);
+                long procTime  = toLong(safeGet(mbs, bean, "processingTime"), -1);
+
+                if (reqCount >= 0) {
+                    long prev  = lastRequestCount.getOrDefault(connName, 0L);
+                    long delta = Math.max(0L, reqCount - prev);
+                    if (delta > 0) reg.counter("tomcat.request.count", "Total requests processed", "1", tags).add(delta);
+                    lastRequestCount.put(connName, reqCount);
+                }
+                if (errCount >= 0) {
+                    long prev  = lastErrorCount.getOrDefault(connName, 0L);
+                    long delta = Math.max(0L, errCount - prev);
+                    if (delta > 0) reg.counter("tomcat.request.error_count", "Total request errors", "1", tags).add(delta);
+                    lastErrorCount.put(connName, errCount);
+                }
+                if (procTime >= 0) {
+                    long prev  = lastProcessingTime.getOrDefault(connName, 0L);
+                    long delta = Math.max(0L, procTime - prev);
+                    if (delta > 0) reg.counter("tomcat.request.processing_time", "Total request processing time", "ms", tags).add(delta);
+                    lastProcessingTime.put(connName, procTime);
+                }
+            }
+        } catch (Throwable t) {
+            AgentLogger.debug("[tomcat-metrics] GlobalRequestProcessor 수집 오류: " + t.getMessage());
+        }
+    }
+
     /** Jetty QueuedThreadPool MBean 수집 */
     private static boolean collectJetty(MBeanServer mbs) {
         try {
@@ -129,12 +175,12 @@ public final class TomcatMetricsCollector {
                 long idle    = toLong(idleThreads, -1);
                 long max     = toLong(maxThreads, -1);
 
-                if (current >= 0) reg.gauge("tomcat.threads.current", tags).set(current);
-                if (idle    >= 0) reg.gauge("tomcat.threads.idle", tags).set(idle);
+                if (current >= 0) reg.gauge("jetty.threads.current", tags).set(current);
+                if (idle    >= 0) reg.gauge("jetty.threads.idle", tags).set(idle);
                 if (current >= 0 && idle >= 0) {
-                    reg.gauge("tomcat.threads.active", tags).set(Math.max(0, current - idle));
+                    reg.gauge("jetty.threads.active", tags).set(Math.max(0, current - idle));
                 }
-                if (max     >= 0) reg.gauge("tomcat.threads.max", tags).set(max);
+                if (max     >= 0) reg.gauge("jetty.threads.max", tags).set(max);
             }
             return true;
         } catch (Throwable t) {
