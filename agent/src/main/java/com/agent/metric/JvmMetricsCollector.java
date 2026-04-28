@@ -1,14 +1,17 @@
 package com.agent.metric;
 
 import com.agent.logs.AgentLogger;
+import java.lang.management.BufferPoolMXBean;
 import java.lang.management.ClassLoadingMXBean;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryUsage;
+import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -121,6 +124,8 @@ public final class JvmMetricsCollector {
                 collectClasses();
                 collectCpu();
                 collectSystemMemory();
+                collectBufferPools();
+                collectFileDescriptors();
             }
 
             MetricRegistry.get().scrapeAndEmit();
@@ -210,9 +215,23 @@ public final class JvmMetricsCollector {
     private static void collectThreads() {
         ThreadMXBean threads = ManagementFactory.getThreadMXBean();
         MetricRegistry reg = MetricRegistry.get();
-        reg.gauge("jvm.threads.count", "Current thread count", "1", Collections.emptyMap()).set(threads.getThreadCount());
-        reg.gauge("jvm.threads.peak", "Peak thread count", "1", Collections.emptyMap()).set(threads.getPeakThreadCount());
-        reg.gauge("jvm.threads.daemon", "Daemon thread count", "1", Collections.emptyMap()).set(threads.getDaemonThreadCount());
+        reg.gauge("jvm.threads.count", "Current thread count", "{thread}", Collections.emptyMap()).set(threads.getThreadCount());
+        reg.gauge("jvm.threads.peak", "Peak thread count", "{thread}", Collections.emptyMap()).set(threads.getPeakThreadCount());
+        reg.gauge("jvm.threads.daemon", "Daemon thread count", "{thread}", Collections.emptyMap()).set(threads.getDaemonThreadCount());
+
+        // Thread state breakdown (OTel: jvm.thread.count with state tag)
+        try {
+            long[] ids = threads.getAllThreadIds();
+            ThreadInfo[] infos = threads.getThreadInfo(ids); // maxDepth=0 → no stack trace
+            Map<Thread.State, Long> stateCounts = new EnumMap<>(Thread.State.class);
+            for (ThreadInfo ti : infos) {
+                if (ti != null) stateCounts.merge(ti.getThreadState(), 1L, Long::sum);
+            }
+            stateCounts.forEach((state, count) -> {
+                Map<String, String> tags = attr("state", state.name().toLowerCase());
+                reg.gauge("jvm.thread.count", "Thread count by state", "{thread}", tags).set(count);
+            });
+        } catch (Throwable ignored) {}
     }
 
     private static void collectClasses() {
@@ -266,6 +285,43 @@ public final class JvmMetricsCollector {
             MetricRegistry reg = MetricRegistry.get();
             reg.gauge("system.memory.free", "Free physical memory", "By", Collections.emptyMap()).set(free);
             reg.gauge("system.memory.total", "Total physical memory", "By", Collections.emptyMap()).set(total);
+        } catch (Throwable ignored) {}
+    }
+
+    private static void collectBufferPools() {
+        try {
+            List<BufferPoolMXBean> pools = ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class);
+            MetricRegistry reg = MetricRegistry.get();
+            for (BufferPoolMXBean bp : pools) {
+                Map<String, String> tags = attr("pool", bp.getName()); // "direct" or "mapped"
+                reg.gauge("jvm.buffer.count", "Buffer pool instance count", "{buffer}", tags)
+                        .set(bp.getCount());
+                long memUsed = bp.getMemoryUsed();
+                if (memUsed >= 0) {
+                    reg.gauge("jvm.buffer.memory.usage", "Buffer pool used memory", "By", tags)
+                            .set(memUsed);
+                }
+                long capacity = bp.getTotalCapacity();
+                if (capacity >= 0) {
+                    reg.gauge("jvm.buffer.memory.limit", "Buffer pool total capacity", "By", tags)
+                            .set(capacity);
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private static void collectFileDescriptors() {
+        try {
+            java.lang.management.OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
+            if (os instanceof com.sun.management.UnixOperatingSystemMXBean) {
+                com.sun.management.UnixOperatingSystemMXBean unix =
+                        (com.sun.management.UnixOperatingSystemMXBean) os;
+                MetricRegistry reg = MetricRegistry.get();
+                reg.gauge("process.open_file_descriptors", "Open file descriptor count", "{fd}", Collections.emptyMap())
+                        .set(unix.getOpenFileDescriptorCount());
+                reg.gauge("process.max_file_descriptors", "Max file descriptor count", "{fd}", Collections.emptyMap())
+                        .set(unix.getMaxFileDescriptorCount());
+            }
         } catch (Throwable ignored) {}
     }
 

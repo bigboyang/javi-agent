@@ -223,6 +223,16 @@ public final class ExplicitBucketHistogram {
         return result;
     }
 
+    /**
+     * DELTA export용 min/max 스냅샷 — 원자적으로 읽고 리셋한다.
+     * 반환: long[]{min, max}. 관측값이 없으면 {0, 0}.
+     */
+    public long[] collectAndResetMinMax() {
+        long min = minValue.getAndSet(Long.MAX_VALUE);
+        long max = maxValue.getAndSet(Long.MIN_VALUE);
+        return new long[]{min == Long.MAX_VALUE ? 0 : min, max == Long.MIN_VALUE ? 0 : max};
+    }
+
     public long[]              getBoundaries()       { return boundaries; }
     public double[]            getDoubleBoundaries() { return doubleBoundaries; }
     public long                getCount()      { return totalCount.sum(); }

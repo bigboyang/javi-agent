@@ -162,9 +162,10 @@ public final class MetricRegistry {
                 if (first == null) first = hist;
                 // getDoubleBoundaries(): 생성자에서 1회 변환된 캐시 — 루프마다 double[] 재할당 없음
                 List<Exemplar> exemplars = hist.collectAndResetExemplars();
+                long[] minMax = hist.collectAndResetMinMax(); // DELTA 구간 min/max 원자적 리셋
                 hpts.add(new MetricData.HistogramPoint(
                         hist.getAttributes(), now,
-                        count, hist.getSum(), hist.getMin(), hist.getMax(),
+                        count, hist.getSum(), minMax[0], minMax[1],
                         hist.getBucketCounts(), hist.getDoubleBoundaries(), exemplars));
             }
             if (first != null) {
