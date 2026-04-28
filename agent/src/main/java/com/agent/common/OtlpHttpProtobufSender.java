@@ -12,12 +12,14 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -80,7 +82,12 @@ public final class OtlpHttpProtobufSender {
         };
 
         this.retryScheduler = Executors.newSingleThreadScheduledExecutor(retryDaemon);
-        this.httpExecutor = Executors.newFixedThreadPool(2, httpDaemon);
+        // bounded queue: prevents unbounded task accumulation under sustained failures
+        this.httpExecutor = new ThreadPoolExecutor(
+                2, 2, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1000),
+                httpDaemon,
+                new ThreadPoolExecutor.DiscardOldestPolicy());
 
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -104,6 +111,10 @@ public final class OtlpHttpProtobufSender {
         long maxWaitMs = (timeoutMs + RETRY_BACKOFF_MS[MAX_ATTEMPTS - 1]) * MAX_ATTEMPTS + 1_000L;
         try {
             return sendAsync(path, protoBody).get(maxWaitMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            AgentLogger.warn("OtlpHttpProtobufSender: 전송 인터럽트 path=" + path);
+            return SendResult.FAILURE;
         } catch (Exception e) {
             AgentLogger.warn("OtlpHttpProtobufSender: 전송 오류 path=" + path + " cause=" + e.getMessage());
             return SendResult.FAILURE;
@@ -118,16 +129,25 @@ public final class OtlpHttpProtobufSender {
         if (state == CbState.OPEN) {
             long elapsed = System.currentTimeMillis() - cbOpenedAtMs;
             if (elapsed < CB_COOLDOWN_MS) return CompletableFuture.completedFuture(SendResult.FAILURE);
-            cbState.compareAndSet(CbState.OPEN, CbState.HALF_OPEN);
+            // CAS 실패 시 다른 스레드가 이미 HALF_OPEN 전환 — 프로브는 하나만 허용
+            if (!cbState.compareAndSet(CbState.OPEN, CbState.HALF_OPEN)) {
+                return CompletableFuture.completedFuture(SendResult.FAILURE);
+            }
+        } else if (state == CbState.HALF_OPEN) {
+            return CompletableFuture.completedFuture(SendResult.FAILURE);
         }
 
-        byte[] body = maybeGzip(protoBody);
+        // tryGzip 실패 시 null 반환 → Content-Encoding 헤더 미설정으로 디코딩 오류 방지
+        byte[] compressed = gzipEnabled ? tryGzip(protoBody) : null;
+        byte[] body = compressed != null ? compressed : protoBody;
+        boolean isGzipped = compressed != null;
+
         CompletableFuture<SendResult> resultFuture = new CompletableFuture<>();
-        doAttempt(path, body, 0, resultFuture);
+        doAttempt(path, body, isGzipped, 0, resultFuture);
         return resultFuture;
     }
 
-    private void doAttempt(String path, byte[] body, int attempt, CompletableFuture<SendResult> resultFuture) {
+    private void doAttempt(String path, byte[] body, boolean isGzipped, int attempt, CompletableFuture<SendResult> resultFuture) {
         if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
         if (attempt >= MAX_ATTEMPTS) { onSendFailure(path); resultFuture.complete(SendResult.FAILURE); return; }
 
@@ -135,38 +155,39 @@ public final class OtlpHttpProtobufSender {
         long delayMs = RETRY_BACKOFF_MS[attempt] + jitter;
         retryScheduler.schedule(() -> {
             if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
-            
+
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseEndpoint + path))
                     .timeout(Duration.ofMillis(timeoutMs))
                     .header("Content-Type", "application/x-protobuf")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body));
 
-            if (gzipEnabled) reqBuilder.header("Content-Encoding", "gzip");
+            if (isGzipped) reqBuilder.header("Content-Encoding", "gzip");
             extraHeaders.forEach(reqBuilder::header);
 
             httpClient.sendAsync(reqBuilder.build(), HttpResponse.BodyHandlers.discarding())
                     .whenComplete((response, ex) -> {
                         if (ex != null) {
-                            scheduleNextAttempt(path, body, attempt + 1, resultFuture);
+                            scheduleNextAttempt(path, body, isGzipped, attempt + 1, resultFuture);
                         } else if (response.statusCode() == 200) {
                             onSendSuccess(path, body.length);
                             resultFuture.complete(SendResult.SUCCESS);
                         } else if (response.statusCode() >= 400 && response.statusCode() < 500) {
+                            onSendFailure(path);
                             resultFuture.complete(SendResult.FAILURE);
                         } else {
-                            scheduleNextAttempt(path, body, attempt + 1, resultFuture);
+                            scheduleNextAttempt(path, body, isGzipped, attempt + 1, resultFuture);
                         }
                     });
         }, delayMs, TimeUnit.MILLISECONDS);
     }
 
-    private void scheduleNextAttempt(String path, byte[] body, int nextAttempt, CompletableFuture<SendResult> resultFuture) {
+    private void scheduleNextAttempt(String path, byte[] body, boolean isGzipped, int nextAttempt, CompletableFuture<SendResult> resultFuture) {
         if (nextAttempt >= MAX_ATTEMPTS) {
             onSendFailure(path);
             resultFuture.complete(SendResult.FAILURE);
         } else {
-            doAttempt(path, body, nextAttempt, resultFuture);
+            doAttempt(path, body, isGzipped, nextAttempt, resultFuture);
         }
     }
 
@@ -197,8 +218,18 @@ public final class OtlpHttpProtobufSender {
 
     public void shutdown() {
         isShutdown.set(true);
-        retryScheduler.shutdown();
-        httpExecutor.shutdown();
+        retryScheduler.shutdownNow();
+        httpExecutor.shutdownNow();
+        try {
+            if (!retryScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                AgentLogger.warn("OtlpHttpProtobufSender: retryScheduler 종료 타임아웃");
+            }
+            if (!httpExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                AgentLogger.warn("OtlpHttpProtobufSender: httpExecutor 종료 타임아웃");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private static Map<String, String> parseHeaders() {
@@ -220,14 +251,17 @@ public final class OtlpHttpProtobufSender {
         return "gzip".equalsIgnoreCase(val);
     }
 
-    private byte[] maybeGzip(byte[] data) {
-        if (!gzipEnabled) return data;
+    // null 반환은 압축 실패를 의미 — 호출자가 Content-Encoding 헤더 결정에 활용
+    private byte[] tryGzip(byte[] data) {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
              java.util.zip.GZIPOutputStream gzos = new java.util.zip.GZIPOutputStream(baos)) {
             gzos.write(data);
             gzos.finish();
             return baos.toByteArray();
-        } catch (Exception e) { return data; }
+        } catch (Exception e) {
+            AgentLogger.warn("OtlpHttpProtobufSender: gzip 압축 실패, 비압축으로 전송");
+            return null;
+        }
     }
 
     public static String resolveEndpoint() {
