@@ -17,12 +17,14 @@ import com.agent.span.SpanStatus;
 import com.agent.trace.InstrumentationScopeInfo;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -78,6 +80,10 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     private static final InstrumentationScopeInfo DEFAULT_SCOPE =
             new InstrumentationScopeInfo("javi-agent", "1.0.0", null);
 
+    // P2: ThreadLocal BAOS 풀 — 배치당 수천 개의 단명 BAOS 객체 생성을 방지해 GC 압력을 줄인다.
+    private static final ThreadLocal<ArrayDeque<ByteArrayOutputStream>> TL_BAOS_POOL =
+            ThreadLocal.withInitial(ArrayDeque::new);
+
     private final OtlpHttpProtobufSender sender;
     private final String serviceName;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
@@ -114,6 +120,29 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
         }
     }
 
+    // P1b: 비동기 export — BatchSpanProcessor Worker를 블로킹하지 않는다.
+    @Override
+    public CompletableFuture<CompletableResultCode> exportAsync(Collection<Span> spans) {
+        if (isShutdown.get() || spans == null || spans.isEmpty())
+            return CompletableFuture.completedFuture(CompletableResultCode.ofSuccess());
+        final int count = spans.size();
+        try {
+            byte[] protoBytes = encodeExportRequestWithResource(spans, getResourceBytes());
+            return sender.sendAsync(TRACE_PATH, protoBytes).thenApply(result -> {
+                if (result == SendResult.SUCCESS) {
+                    exportedSpans.addAndGet(count);
+                    return CompletableResultCode.ofSuccess();
+                }
+                droppedSpans.addAndGet(count);
+                return CompletableResultCode.ofFailure();
+            });
+        } catch (Exception e) {
+            AgentLogger.warn("OtlpHttpSpanExporter: 인코딩 오류 — " + e.getMessage());
+            droppedSpans.addAndGet(count);
+            return CompletableFuture.completedFuture(CompletableResultCode.ofFailure());
+        }
+    }
+
     @Override
     public CompletableResultCode flush() { return CompletableResultCode.ofSuccess(); }
 
@@ -135,6 +164,18 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
         return cachedResourceBytes;
     }
 
+    // P2: BAOS 풀 헬퍼 — 풀이 비어 있으면 새로 할당, 있으면 재사용
+    private static ByteArrayOutputStream acquire(int hint) {
+        ArrayDeque<ByteArrayOutputStream> pool = TL_BAOS_POOL.get();
+        ByteArrayOutputStream baos = pool.isEmpty() ? new ByteArrayOutputStream(hint) : pool.pop();
+        baos.reset();
+        return baos;
+    }
+
+    private static void release(ByteArrayOutputStream baos) {
+        TL_BAOS_POOL.get().push(baos);
+    }
+
     private byte[] encodeExportRequestWithResource(Collection<Span> spans, byte[] resourceBytes) {
         Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
         Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = new LinkedHashMap<>();
@@ -146,171 +187,232 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
             byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
         }
 
-        ByteArrayOutputStream rsOut = new ByteArrayOutputStream(128 + spans.size() * 300);
-        ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
+        ByteArrayOutputStream rsOut = acquire(128 + spans.size() * 300);
+        try {
+            ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
 
-        for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
-            InstrumentationScopeInfo scope = entry.getKey();
-            List<ReadableSpan> scopeSpanList = entry.getValue();
+            for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
+                InstrumentationScopeInfo scope = entry.getKey();
+                List<ReadableSpan> scopeSpanList = entry.getValue();
 
-            ByteArrayOutputStream spansOut = new ByteArrayOutputStream(scopeSpanList.size() * 300);
-            for (ReadableSpan rs : scopeSpanList) {
-                ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+                ByteArrayOutputStream spansOut = acquire(scopeSpanList.size() * 300);
+                try {
+                    for (ReadableSpan rs : scopeSpanList) {
+                        ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+                    }
+
+                    ByteArrayOutputStream scopeOut = acquire(64);
+                    try {
+                        ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME,
+                                scope.getName() != null ? scope.getName() : "javi-agent");
+                        if (scope.getVersion() != null)
+                            ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
+
+                        ByteArrayOutputStream scopeSpansOut = acquire(64 + spansOut.size());
+                        try {
+                            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
+                            byte[] spansBytes = spansOut.toByteArray();
+                            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
+                            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+                        } finally {
+                            release(scopeSpansOut);
+                        }
+                    } finally {
+                        release(scopeOut);
+                    }
+                } finally {
+                    release(spansOut);
+                }
             }
 
-            ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(64);
-            ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, scope.getName() != null ? scope.getName() : "javi-agent");
-            if (scope.getVersion() != null) ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
-
-            ByteArrayOutputStream scopeSpansOut = new ByteArrayOutputStream(64 + spansOut.size());
-            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
-            byte[] spansBytes = spansOut.toByteArray();
-            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
-
-            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+            ByteArrayOutputStream requestOut = acquire(rsOut.size() + 4);
+            try {
+                ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_SPANS, rsOut.toByteArray());
+                return requestOut.toByteArray();
+            } finally {
+                release(requestOut);
+            }
+        } finally {
+            release(rsOut);
         }
-
-        ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rsOut.size() + 4);
-        ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_SPANS, rsOut.toByteArray());
-        return requestOut.toByteArray();
     }
 
     private static byte[] encodeResource(String serviceName) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
-            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+        ByteArrayOutputStream out = acquire(256);
+        try {
+            for (Map.Entry<String, String> entry : ResourceInfo.getAttributes().entrySet()) {
+                ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV(entry.getKey(), entry.getValue()));
+            }
+            if (!ResourceInfo.getAttributes().containsKey("service.name")) {
+                ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
+            }
+            return out.toByteArray();
+        } finally {
+            release(out);
         }
-        if (!ResourceInfo.getAttributes().containsKey("service.name")) {
-            ProtoEncoder.writeMessage(out, FN_RESOURCE_ATTRS, encodeStringKV("service.name", serviceName));
-        }
-        return out.toByteArray();
     }
 
     private static byte[] encodeSpan(ReadableSpan rs, Set<String> dropKeys) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-        SpanContext ctx = rs.getContext();
+        ByteArrayOutputStream out = acquire(256);
+        try {
+            SpanContext ctx = rs.getContext();
 
-        byte[] traceId = ProtoEncoder.hexToBytes(ctx.getTraceId());
-        byte[] spanId  = ProtoEncoder.hexToBytes(ctx.getSpanId());
-        if (traceId != null) ProtoEncoder.writeBytes(out, FN_SPAN_TRACE_ID, traceId);
-        if (spanId  != null) ProtoEncoder.writeBytes(out, FN_SPAN_SPAN_ID,  spanId);
+            byte[] traceId = ProtoEncoder.hexToBytes(ctx.getTraceId());
+            byte[] spanId  = ProtoEncoder.hexToBytes(ctx.getSpanId());
+            if (traceId != null) ProtoEncoder.writeBytes(out, FN_SPAN_TRACE_ID, traceId);
+            if (spanId  != null) ProtoEncoder.writeBytes(out, FN_SPAN_SPAN_ID,  spanId);
 
-        String traceState = ctx.getTraceState().getValue();
-        if (traceState != null && !traceState.isEmpty()) ProtoEncoder.writeString(out, FN_SPAN_TRACE_STATE, traceState);
+            String traceState = ctx.getTraceState().getValue();
+            if (traceState != null && !traceState.isEmpty())
+                ProtoEncoder.writeString(out, FN_SPAN_TRACE_STATE, traceState);
 
-        byte[] parentId = ProtoEncoder.hexToBytes(ctx.getParentSpanId());
-        if (parentId != null) ProtoEncoder.writeBytes(out, FN_SPAN_PARENT_ID, parentId);
+            byte[] parentId = ProtoEncoder.hexToBytes(ctx.getParentSpanId());
+            if (parentId != null) ProtoEncoder.writeBytes(out, FN_SPAN_PARENT_ID, parentId);
 
-        ProtoEncoder.writeString(out, FN_SPAN_NAME, rs.getName());
-        ProtoEncoder.writeVarint32(out, FN_SPAN_KIND, kindToOtlp(rs.getKind()));
-        ProtoEncoder.writeFixed64Field(out, FN_SPAN_START_NS, rs.getStartTimeNanos());
-        ProtoEncoder.writeFixed64Field(out, FN_SPAN_END_NS,   rs.getEndTimeNanos());
+            ProtoEncoder.writeString(out, FN_SPAN_NAME, rs.getName());
+            ProtoEncoder.writeVarint32(out, FN_SPAN_KIND, kindToOtlp(rs.getKind()));
+            ProtoEncoder.writeFixed64Field(out, FN_SPAN_START_NS, rs.getStartTimeNanos());
+            ProtoEncoder.writeFixed64Field(out, FN_SPAN_END_NS,   rs.getEndTimeNanos());
 
-        if (rs.getAttributes() != null) {
-            for (Map.Entry<AttributeKey<?>, Object> entry : rs.getAttributes().entrySet()) {
-                String key = entry.getKey().getKey();
-                if (!dropKeys.isEmpty() && dropKeys.contains(key)) continue;
-                byte[] kv = encodeAnyKV(key, entry.getValue());
-                if (kv != null) ProtoEncoder.writeMessage(out, FN_SPAN_ATTRS, kv);
+            if (rs.getAttributes() != null) {
+                for (Map.Entry<AttributeKey<?>, Object> entry : rs.getAttributes().entrySet()) {
+                    String key = entry.getKey().getKey();
+                    if (!dropKeys.isEmpty() && dropKeys.contains(key)) continue;
+                    byte[] kv = encodeAnyKV(key, entry.getValue());
+                    if (kv != null) ProtoEncoder.writeMessage(out, FN_SPAN_ATTRS, kv);
+                }
             }
-        }
 
-        int droppedAttrs = rs.getDroppedAttributeCount();
-        if (droppedAttrs > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_ATTRS, droppedAttrs);
+            int droppedAttrs = rs.getDroppedAttributeCount();
+            if (droppedAttrs > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_ATTRS, droppedAttrs);
 
-        if (rs.getEvents() != null) {
-            for (SpanEvent event : rs.getEvents()) {
-                ProtoEncoder.writeMessage(out, FN_SPAN_EVENTS, encodeEvent(event));
+            if (rs.getEvents() != null) {
+                for (SpanEvent event : rs.getEvents()) {
+                    ProtoEncoder.writeMessage(out, FN_SPAN_EVENTS, encodeEvent(event));
+                }
             }
-        }
 
-        if (rs.getLinks() != null) {
-            for (SpanLink link : rs.getLinks()) {
-                if (link != null) ProtoEncoder.writeMessage(out, FN_SPAN_LINKS, encodeLink(link));
+            if (rs.getLinks() != null) {
+                for (SpanLink link : rs.getLinks()) {
+                    if (link != null) ProtoEncoder.writeMessage(out, FN_SPAN_LINKS, encodeLink(link));
+                }
             }
+
+            int droppedLinks = rs.getDroppedLinksCount();
+            if (droppedLinks > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_LINKS, droppedLinks);
+
+            byte[] statusBytes = encodeStatus(rs.getStatus(), rs.getStatusDescription());
+            if (statusBytes.length > 0) ProtoEncoder.writeMessage(out, FN_SPAN_STATUS, statusBytes);
+
+            int flags = ctx.getTraceFlags().asByte() & 0xFF;
+            if (flags != 0) ProtoEncoder.writeFixed32Field(out, FN_SPAN_FLAGS, flags);
+
+            return out.toByteArray();
+        } finally {
+            release(out);
         }
-
-        int droppedLinks = rs.getDroppedLinksCount();
-        if (droppedLinks > 0) ProtoEncoder.writeVarint32(out, FN_SPAN_DROPPED_LINKS, droppedLinks);
-
-        byte[] statusBytes = encodeStatus(rs.getStatus(), rs.getStatusDescription());
-        if (statusBytes.length > 0) ProtoEncoder.writeMessage(out, FN_SPAN_STATUS, statusBytes);
-
-        int flags = ctx.getTraceFlags().asByte() & 0xFF;
-        if (flags != 0) ProtoEncoder.writeFixed32Field(out, FN_SPAN_FLAGS, flags);
-
-        return out.toByteArray();
     }
 
     private static byte[] encodeEvent(SpanEvent event) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
-        ProtoEncoder.writeFixed64Field(out, FN_EVENT_TIME_NS, event.getTimestampNanos());
-        ProtoEncoder.writeString(out, FN_EVENT_NAME, event.getName());
-        if (event.getAttributes() != null) {
-            for (Map.Entry<AttributeKey<?>, Object> e : event.getAttributes().entrySet()) {
-                byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
-                if (kv != null) ProtoEncoder.writeMessage(out, FN_EVENT_ATTRS, kv);
+        ByteArrayOutputStream out = acquire(64);
+        try {
+            ProtoEncoder.writeFixed64Field(out, FN_EVENT_TIME_NS, event.getTimestampNanos());
+            ProtoEncoder.writeString(out, FN_EVENT_NAME, event.getName());
+            if (event.getAttributes() != null) {
+                for (Map.Entry<AttributeKey<?>, Object> e : event.getAttributes().entrySet()) {
+                    byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
+                    if (kv != null) ProtoEncoder.writeMessage(out, FN_EVENT_ATTRS, kv);
+                }
             }
+            return out.toByteArray();
+        } finally {
+            release(out);
         }
-        return out.toByteArray();
     }
 
     private static byte[] encodeLink(SpanLink link) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(64);
-        SpanContext lCtx = link.getSpanContext();
-        if (lCtx != null) {
-            byte[] ltid = ProtoEncoder.hexToBytes(lCtx.getTraceId());
-            byte[] lsid = ProtoEncoder.hexToBytes(lCtx.getSpanId());
-            if (ltid != null) ProtoEncoder.writeBytes(out, FN_LINK_TRACE_ID, ltid);
-            if (lsid != null) ProtoEncoder.writeBytes(out, FN_LINK_SPAN_ID,  lsid);
-            String lts = lCtx.getTraceState().getValue();
-            if (lts != null && !lts.isEmpty()) ProtoEncoder.writeString(out, 3, lts);
-        }
-        if (link.getAttributes() != null) {
-            for (Map.Entry<AttributeKey<?>, Object> e : link.getAttributes().entrySet()) {
-                byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
-                if (kv != null) ProtoEncoder.writeMessage(out, FN_LINK_ATTRS, kv);
+        ByteArrayOutputStream out = acquire(64);
+        try {
+            SpanContext lCtx = link.getSpanContext();
+            if (lCtx != null) {
+                byte[] ltid = ProtoEncoder.hexToBytes(lCtx.getTraceId());
+                byte[] lsid = ProtoEncoder.hexToBytes(lCtx.getSpanId());
+                if (ltid != null) ProtoEncoder.writeBytes(out, FN_LINK_TRACE_ID, ltid);
+                if (lsid != null) ProtoEncoder.writeBytes(out, FN_LINK_SPAN_ID,  lsid);
+                String lts = lCtx.getTraceState().getValue();
+                if (lts != null && !lts.isEmpty()) ProtoEncoder.writeString(out, 3, lts);
             }
+            if (link.getAttributes() != null) {
+                for (Map.Entry<AttributeKey<?>, Object> e : link.getAttributes().entrySet()) {
+                    byte[] kv = encodeAnyKV(e.getKey().getKey(), e.getValue());
+                    if (kv != null) ProtoEncoder.writeMessage(out, FN_LINK_ATTRS, kv);
+                }
+            }
+            return out.toByteArray();
+        } finally {
+            release(out);
         }
-        return out.toByteArray();
     }
 
     private static byte[] encodeStatus(SpanStatus status, String description) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(16);
-        int code = (status == SpanStatus.OK) ? 1 : (status == SpanStatus.ERROR) ? 2 : 0;
-        if (code != 0) ProtoEncoder.writeVarint32(out, FN_STATUS_CODE, code);
-        if (description != null && !description.isEmpty()) ProtoEncoder.writeString(out, FN_STATUS_MESSAGE, description);
-        return out.toByteArray();
+        ByteArrayOutputStream out = acquire(16);
+        try {
+            int code = (status == SpanStatus.OK) ? 1 : (status == SpanStatus.ERROR) ? 2 : 0;
+            if (code != 0) ProtoEncoder.writeVarint32(out, FN_STATUS_CODE, code);
+            if (description != null && !description.isEmpty())
+                ProtoEncoder.writeString(out, FN_STATUS_MESSAGE, description);
+            return out.toByteArray();
+        } finally {
+            release(out);
+        }
     }
 
     private static byte[] encodeStringKV(String key, String value) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + value.length() + 8);
-        ProtoEncoder.writeString(out, FN_KV_KEY, key);
-        ByteArrayOutputStream av = new ByteArrayOutputStream(value.length() + 4);
-        ProtoEncoder.writeString(av, FN_AV_STRING, value);
-        ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
-        return out.toByteArray();
+        ByteArrayOutputStream av = acquire(value.length() + 4);
+        try {
+            ProtoEncoder.writeString(av, FN_AV_STRING, value);
+            ByteArrayOutputStream out = acquire(key.length() + value.length() + 8);
+            try {
+                ProtoEncoder.writeString(out, FN_KV_KEY, key);
+                ProtoEncoder.writeMessage(out, FN_KV_VALUE, av.toByteArray());
+                return out.toByteArray();
+            } finally {
+                release(out);
+            }
+        } finally {
+            release(av);
+        }
     }
 
     private static byte[] encodeAnyKV(String key, Object value) {
-        ByteArrayOutputStream avOut = new ByteArrayOutputStream(32);
-        if (value instanceof String) {
-            ProtoEncoder.writeString(avOut, FN_AV_STRING, (String) value);
-        } else if (value instanceof Long || value instanceof Integer) {
-            ProtoEncoder.writeTag(avOut, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
-            ProtoEncoder.writeRawVarint64(avOut, ((Number) value).longValue());
-        } else if (value instanceof Double || value instanceof Float) {
-            ProtoEncoder.writeDoubleField(avOut, FN_AV_DOUBLE, ((Number) value).doubleValue());
-        } else if (value instanceof Boolean) {
-            ProtoEncoder.writeVarint32(avOut, FN_AV_BOOL, (Boolean) value ? 1 : 0);
-        } else if (value != null) {
-            ProtoEncoder.writeString(avOut, FN_AV_STRING, value.toString());
-        } else return null;
+        ByteArrayOutputStream avOut = acquire(32);
+        try {
+            if (value instanceof String) {
+                ProtoEncoder.writeString(avOut, FN_AV_STRING, (String) value);
+            } else if (value instanceof Long || value instanceof Integer) {
+                ProtoEncoder.writeTag(avOut, FN_AV_INT, ProtoEncoder.WIRE_VARINT);
+                ProtoEncoder.writeRawVarint64(avOut, ((Number) value).longValue());
+            } else if (value instanceof Double || value instanceof Float) {
+                ProtoEncoder.writeDoubleField(avOut, FN_AV_DOUBLE, ((Number) value).doubleValue());
+            } else if (value instanceof Boolean) {
+                ProtoEncoder.writeVarint32(avOut, FN_AV_BOOL, (Boolean) value ? 1 : 0);
+            } else if (value != null) {
+                ProtoEncoder.writeString(avOut, FN_AV_STRING, value.toString());
+            } else {
+                return null;
+            }
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream(key.length() + avOut.size() + 8);
-        ProtoEncoder.writeString(out, FN_KV_KEY, key);
-        ProtoEncoder.writeMessage(out, FN_KV_VALUE, avOut.toByteArray());
-        return out.toByteArray();
+            ByteArrayOutputStream out = acquire(key.length() + avOut.size() + 8);
+            try {
+                ProtoEncoder.writeString(out, FN_KV_KEY, key);
+                ProtoEncoder.writeMessage(out, FN_KV_VALUE, avOut.toByteArray());
+                return out.toByteArray();
+            } finally {
+                release(out);
+            }
+        } finally {
+            release(avOut);
+        }
     }
 
     private static int kindToOtlp(SpanKind kind) {

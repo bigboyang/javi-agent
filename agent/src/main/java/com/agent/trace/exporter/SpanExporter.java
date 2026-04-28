@@ -4,6 +4,7 @@ import com.agent.common.utils.concurrent.CompletableResultCode;
 import com.agent.span.Span;
 import java.io.Closeable;
 import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -11,6 +12,10 @@ import java.util.concurrent.TimeUnit;
  */
 public interface SpanExporter extends Closeable {
     CompletableResultCode export(Collection<Span> spans);
+
+    default CompletableFuture<CompletableResultCode> exportAsync(Collection<Span> spans) {
+        return CompletableFuture.completedFuture(export(spans));
+    }
 
     default CompletableResultCode flush() {
         return CompletableResultCode.ofSuccess();

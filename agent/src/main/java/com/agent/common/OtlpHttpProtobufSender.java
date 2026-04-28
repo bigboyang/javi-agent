@@ -45,6 +45,7 @@ public final class OtlpHttpProtobufSender {
 
     private static final long[] RETRY_BACKOFF_MS = {0L, 1_000L, 2_000L};
     private static final int MAX_ATTEMPTS = 3;
+    private static final long DEFAULT_RETRY_AFTER_MS = 5_000L;
 
     private enum CbState { CLOSED, OPEN, HALF_OPEN }
     private final AtomicReference<CbState> cbState    = new AtomicReference<>(CbState.CLOSED);
@@ -90,7 +91,7 @@ public final class OtlpHttpProtobufSender {
                 new ThreadPoolExecutor.DiscardOldestPolicy());
 
         this.httpClient = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
+                .version(HttpClient.Version.HTTP_2)
                 .connectTimeout(Duration.ofSeconds(5))
                 .executor(this.httpExecutor)
                 .build();
@@ -150,9 +151,12 @@ public final class OtlpHttpProtobufSender {
     private void doAttempt(String path, byte[] body, boolean isGzipped, int attempt, CompletableFuture<SendResult> resultFuture) {
         if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
         if (attempt >= MAX_ATTEMPTS) { onSendFailure(path); resultFuture.complete(SendResult.FAILURE); return; }
-
         long jitter = ThreadLocalRandom.current().nextLong(100L * (1L << attempt));
-        long delayMs = RETRY_BACKOFF_MS[attempt] + jitter;
+        executeAttempt(path, body, isGzipped, attempt, resultFuture, RETRY_BACKOFF_MS[attempt] + jitter);
+    }
+
+    private void executeAttempt(String path, byte[] body, boolean isGzipped, int attempt,
+                                 CompletableFuture<SendResult> resultFuture, long delayMs) {
         retryScheduler.schedule(() -> {
             if (isShutdown.get()) { resultFuture.complete(SendResult.SHUTDOWN); return; }
 
@@ -168,33 +172,50 @@ public final class OtlpHttpProtobufSender {
             httpClient.sendAsync(reqBuilder.build(), HttpResponse.BodyHandlers.discarding())
                     .whenComplete((response, ex) -> {
                         if (ex != null) {
-                            scheduleNextAttempt(path, body, isGzipped, attempt + 1, resultFuture);
+                            recordRetry();
+                            doAttempt(path, body, isGzipped, attempt + 1, resultFuture);
                         } else if (response.statusCode() == 200) {
                             onSendSuccess(path, body.length);
                             resultFuture.complete(SendResult.SUCCESS);
+                        } else if (response.statusCode() == 429) {
+                            // P5: Retry-After 헤더를 존중하여 rate-limit 재시도 지연
+                            long retryAfterMs = parseRetryAfterMs(response);
+                            recordRetry();
+                            int next = attempt + 1;
+                            if (next >= MAX_ATTEMPTS) {
+                                onSendFailure(path);
+                                resultFuture.complete(SendResult.FAILURE);
+                            } else {
+                                executeAttempt(path, body, isGzipped, next, resultFuture, retryAfterMs);
+                            }
                         } else if (response.statusCode() >= 400 && response.statusCode() < 500) {
                             onSendFailure(path);
                             resultFuture.complete(SendResult.FAILURE);
                         } else {
-                            scheduleNextAttempt(path, body, isGzipped, attempt + 1, resultFuture);
+                            recordRetry();
+                            doAttempt(path, body, isGzipped, attempt + 1, resultFuture);
                         }
                     });
         }, delayMs, TimeUnit.MILLISECONDS);
     }
 
-    private void scheduleNextAttempt(String path, byte[] body, boolean isGzipped, int nextAttempt, CompletableFuture<SendResult> resultFuture) {
-        if (nextAttempt >= MAX_ATTEMPTS) {
-            onSendFailure(path);
-            resultFuture.complete(SendResult.FAILURE);
-        } else {
-            doAttempt(path, body, isGzipped, nextAttempt, resultFuture);
-        }
+    // P5: Retry-After 헤더 파싱 (초 단위 정수값만 지원)
+    private long parseRetryAfterMs(HttpResponse<?> response) {
+        return response.headers().firstValue("Retry-After")
+                .map(v -> {
+                    try { return Long.parseLong(v.trim()) * 1_000L; }
+                    catch (NumberFormatException ignored) { return DEFAULT_RETRY_AFTER_MS; }
+                })
+                .orElse(DEFAULT_RETRY_AFTER_MS);
     }
 
     private void onSendSuccess(String path, int bytes) {
         cbFailures.set(0);
         cbState.set(CbState.CLOSED);
         recordCbMetric(CbState.CLOSED);
+        // P6: sender-level 성공 메트릭
+        recordCounter("javi.otlp.send.success", 1);
+        recordCounter("javi.otlp.send.bytes", bytes);
     }
 
     private void onSendFailure(String path) {
@@ -207,12 +228,25 @@ public final class OtlpHttpProtobufSender {
             cbFailures.set(0);
         }
         recordCbMetric(cbState.get());
+        // P6: sender-level 실패 메트릭
+        recordCounter("javi.otlp.send.failure", 1);
+    }
+
+    // P6: retry 발생 시 카운터 기록
+    private void recordRetry() {
+        recordCounter("javi.otlp.send.retry", 1);
     }
 
     private void recordCbMetric(CbState state) {
         try {
             int val = state == CbState.CLOSED ? 0 : state == CbState.HALF_OPEN ? 1 : 2;
             MetricRegistry.get().gauge("javi.otlp.circuit_breaker.state", Collections.emptyMap()).set(val);
+        } catch (Exception ignored) {}
+    }
+
+    private void recordCounter(String name, long delta) {
+        try {
+            MetricRegistry.get().counter(name, Collections.emptyMap()).add(delta);
         } catch (Exception ignored) {}
     }
 
