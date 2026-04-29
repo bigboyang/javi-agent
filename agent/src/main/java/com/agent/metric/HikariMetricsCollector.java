@@ -6,9 +6,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
 
@@ -31,32 +28,11 @@ import javax.management.ObjectName;
  */
 public final class HikariMetricsCollector {
 
-    private static volatile ScheduledExecutorService executor;
     private static final ConcurrentHashMap<String, Long> lastTimeoutTotal = new ConcurrentHashMap<>();
 
     private HikariMetricsCollector() {}
 
-    /**
-     * HikariCP 메트릭 수집을 시작한다.
-     * 애플리케이션이 초기화된 후 MBean이 등록되므로 초기 딜레이 10초 후 15초 간격으로 수집한다.
-     */
-    public static synchronized void start() {
-        if (executor != null) return;
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "javi-hikari-metrics");
-            t.setDaemon(true);
-            return t;
-        });
-        // 앱 초기화 후 MBean이 등록될 시간을 주기 위해 10초 딜레이
-        executor.scheduleAtFixedRate(HikariMetricsCollector::collect, 10, 15, TimeUnit.SECONDS);
-        AgentLogger.info("HikariMetricsCollector 시작 (10초 딜레이 후 15초 간격)");
-    }
-
-    public static void stop() {
-        if (executor != null) {
-            executor.shutdown();
-        }
-    }
+    public static void stop() {}
 
     static void collect() {
         try {
@@ -80,7 +56,6 @@ public final class HikariMetricsCollector {
                 collectPool(mbs, poolName);
             }
 
-            MetricRegistry.get().scrapeAndEmit();
         } catch (Throwable t) {
             AgentLogger.debug("[hikari-metrics] 수집 오류: " + t.getMessage());
         }

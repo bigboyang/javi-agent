@@ -16,9 +16,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import javax.management.NotificationEmitter;
 import javax.management.NotificationListener;
 import javax.management.openmbean.CompositeData;
@@ -41,27 +38,19 @@ import javax.management.openmbean.CompositeData;
  */
 public final class JvmMetricsCollector {
 
-    private static volatile ScheduledExecutorService executor;
-
     // GC 직전 값을 보관 → delta를 Counter에 add (누적 → SUM/Monotonic 전환)
     private static final ConcurrentHashMap<String, Long> lastGcCount   = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> lastGcElapsed = new ConcurrentHashMap<>();
 
     private JvmMetricsCollector() {}
 
-    /** JVM 메트릭 수집을 시작한다. 즉시 1회 수집 후 15초 간격으로 반복한다. */
+    /**
+     * GC 이벤트 기반 Notification Listener를 등록한다.
+     * 주기적 수집은 {@link MetricsCollectorScheduler}가 담당한다.
+     */
     public static synchronized void start() {
-        if (executor != null) return;
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "javi-jvm-metrics");
-            t.setDaemon(true);
-            return t;
-        });
-        executor.scheduleAtFixedRate(JvmMetricsCollector::collect, 0, 15, TimeUnit.SECONDS);
-        
         registerGcNotificationListener();
-        
-        AgentLogger.info("JvmMetricsCollector 시작 (15초 간격)");
+        AgentLogger.info("JvmMetricsCollector 시작 (GC Listener 등록, 스케줄링은 MetricsCollectorScheduler)");
     }
 
     private static void registerGcNotificationListener() {
@@ -104,11 +93,7 @@ public final class JvmMetricsCollector {
         }
     }
 
-    public static void stop() {
-        if (executor != null) {
-            executor.shutdown();
-        }
-    }
+    public static void stop() {}
 
     static void collect() {
         try {
@@ -127,8 +112,6 @@ public final class JvmMetricsCollector {
                 collectBufferPools();
                 collectFileDescriptors();
             }
-
-            MetricRegistry.get().scrapeAndEmit();
         } catch (Throwable t) {
             AgentLogger.debug("[jvm-metrics] 수집 오류: " + t.getMessage());
         }

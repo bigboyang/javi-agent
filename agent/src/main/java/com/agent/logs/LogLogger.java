@@ -17,6 +17,7 @@ import java.util.logging.Logger;
 public final class LogLogger {
 
     private static final Logger LOGGER;
+    private static final String LOG_FILE_PATH;
 
     static {
         String logFile = get("JAVI_LOG_DATA_FILE", "javi.log.data.file", "javi/logs/javi-logs.log");

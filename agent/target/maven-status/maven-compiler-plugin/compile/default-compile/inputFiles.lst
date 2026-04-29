@@ -49,6 +49,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/profiling/AsyncProfilerBackend.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/CompletableFutureAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/generator/RandomIdGenerator.java
+/Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricsCollectorScheduler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/SdkTracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/TraceIdRatioBasedSampler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/Exemplar.java

@@ -29,10 +29,9 @@ import com.agent.instrumentation.ElasticsearchAdvice;
 import com.agent.instrumentation.ScheduledTaskAdvice;
 import com.agent.logs.AgentLogger;
 import com.agent.logs.AppLogCollector;
-import com.agent.metric.HikariMetricsCollector;
 import com.agent.metric.JvmMetricsCollector;
 import com.agent.metric.K8sMetricsCollector;
-import com.agent.metric.TomcatMetricsCollector;
+import com.agent.metric.MetricsCollectorScheduler;
 import com.agent.profiling.ProfilingScheduler;
 import java.io.File;
 import java.io.IOException;
@@ -132,10 +131,9 @@ public class SimpleAgent {
         installLogbackInstrumentation(inst);
         installLog4j2Instrumentation(inst);
         AppLogCollector.install();
-        JvmMetricsCollector.start();
-        HikariMetricsCollector.start();
-        TomcatMetricsCollector.start();
-        K8sMetricsCollector.start();  // GAP-08 확장: cgroup 기반 Pod 리소스 메트릭
+        JvmMetricsCollector.start();        // GC Notification Listener 등록
+        K8sMetricsCollector.start();        // k8sTags 초기화 (cgroup 기반 Pod 리소스 메트릭)
+        MetricsCollectorScheduler.start();  // 단일 스케줄러로 모든 수집기 통합 실행
 
         // Continuous Profiling (GAP-07): 30초 주기 CPU 샘플링 → javi-collector 전송
         ProfilingScheduler.start();
@@ -146,10 +144,7 @@ public class SimpleAgent {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             AgentLogger.info("Shutdown: 남은 span/metric/log flush 중...");
             try {
-                JvmMetricsCollector.stop();
-                HikariMetricsCollector.stop();
-                TomcatMetricsCollector.stop();
-                K8sMetricsCollector.stop();
+                MetricsCollectorScheduler.stop();
                 ProfilingScheduler.stop();
                 AgentRuntime.provider().forceFlush().join(5, TimeUnit.SECONDS);
                 AgentRuntime.provider().shutdown().join(3, TimeUnit.SECONDS);

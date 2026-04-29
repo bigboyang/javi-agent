@@ -9,9 +9,6 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -35,15 +32,13 @@ import java.util.concurrent.atomic.AtomicLong;
  *
  * <p>환경변수:
  * <ul>
- *   <li>{@code JAVI_K8S_METRICS_ENABLED}      — "false"이면 비활성화 (기본: true)</li>
- *   <li>{@code JAVI_K8S_METRICS_INTERVAL_SEC} — 수집 주기 초 (기본: 15)</li>
+ *   <li>{@code JAVI_K8S_METRICS_ENABLED} — "false"이면 비활성화 (기본: true)</li>
+ *   <li>수집 주기는 {@link MetricsCollectorScheduler} {@code JAVI_METRICS_INTERVAL_SEC}으로 제어</li>
  * </ul>
  */
 public final class K8sMetricsCollector {
 
-    private static final String ENV_ENABLED      = "JAVI_K8S_METRICS_ENABLED";
-    private static final String ENV_INTERVAL_SEC = "JAVI_K8S_METRICS_INTERVAL_SEC";
-    private static final long   DEFAULT_INTERVAL_SEC = 15L;
+    private static final String ENV_ENABLED = "JAVI_K8S_METRICS_ENABLED";
 
     // cgroup v1 경로
     private static final String CGROUPV1_CPU_USAGE   = "/sys/fs/cgroup/cpu/cpuacct.usage";
@@ -60,23 +55,25 @@ public final class K8sMetricsCollector {
     private static final String CGROUPV2_MEM_MAX     = "/sys/fs/cgroup/memory.max";
     private static final String CGROUPV2_MEM_STAT    = "/sys/fs/cgroup/memory.stat";
 
-    private static volatile ScheduledExecutorService executor;
-
     // CPU rate 계산을 위한 이전 값 저장
     private static final AtomicLong lastCpuNs    = new AtomicLong(-1);
     private static final AtomicLong lastSampleMs = new AtomicLong(-1);
 
     // K8s 리소스 태그 — start() 시 1회 초기화
     private static volatile Map<String, String> k8sTags = Collections.emptyMap();
+    private static volatile boolean enabled = false;
 
     private K8sMetricsCollector() {}
 
+    /**
+     * k8sTags를 초기화한다. 스케줄링은 {@link MetricsCollectorScheduler}가 담당한다.
+     */
     public static synchronized void start() {
         if ("false".equalsIgnoreCase(System.getenv(ENV_ENABLED))) {
             AgentLogger.info("[k8s-metrics] JAVI_K8S_METRICS_ENABLED=false — 비활성화");
             return;
         }
-        if (executor != null) return;
+        if (enabled) return;
 
         Map<String, String> resource = ResourceInfo.getAttributes();
         Map<String, String> tags = new HashMap<>(4);
@@ -85,24 +82,14 @@ public final class K8sMetricsCollector {
         putIfPresent(tags, resource, "k8s.node.name");
         putIfPresent(tags, resource, "k8s.container.name");
         k8sTags = Collections.unmodifiableMap(tags);
-
-        long intervalSec = parseLong(ENV_INTERVAL_SEC, DEFAULT_INTERVAL_SEC);
-        executor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "javi-k8s-metrics");
-            t.setDaemon(true);
-            return t;
-        });
-        executor.scheduleAtFixedRate(K8sMetricsCollector::collect, 0, intervalSec, TimeUnit.SECONDS);
-        AgentLogger.info("[k8s-metrics] 시작 — 주기: " + intervalSec + "s");
+        enabled = true;
+        AgentLogger.info("[k8s-metrics] 초기화 완료 (스케줄링은 MetricsCollectorScheduler)");
     }
 
-    public static void stop() {
-        if (executor != null) {
-            executor.shutdown();
-        }
-    }
+    public static void stop() {}
 
     static void collect() {
+        if (!enabled) return;
         try {
             String metricsScope = com.agent.config.RemoteConfigHolder.get().getMetrics();
             if ("disabled".equals(metricsScope)) return;
@@ -137,8 +124,6 @@ public final class K8sMetricsCollector {
                 reg.gauge("container.memory.rss", "Container memory RSS", "By", k8sTags)
                         .set(memRssBytes);
             }
-
-            reg.scrapeAndEmit();
         } catch (Throwable t) {
             AgentLogger.debug("[k8s-metrics] 수집 오류: " + t.getMessage());
         }
@@ -253,14 +238,5 @@ public final class K8sMetricsCollector {
     private static void putIfPresent(Map<String, String> dest, Map<String, String> src, String key) {
         String v = src.get(key);
         if (v != null && !v.isEmpty()) dest.put(key, v);
-    }
-
-    private static long parseLong(String envKey, long defaultVal) {
-        try {
-            String v = System.getenv(envKey);
-            return (v != null && !v.isEmpty()) ? Long.parseLong(v) : defaultVal;
-        } catch (NumberFormatException e) {
-            return defaultVal;
-        }
     }
 }
