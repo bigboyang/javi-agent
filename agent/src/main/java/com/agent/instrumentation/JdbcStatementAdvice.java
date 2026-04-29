@@ -136,14 +136,14 @@ public final class JdbcStatementAdvice {
             DB_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
                 java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                 tags.put("db.system", dbSystem);
-                tags.put("db.operation", dbOperation);
+                tags.put("db.operation.name", dbOperation);
                 return com.agent.metric.MetricRegistry.get().counter("db.client.operation.count", tags);
             }).increment();
 
             DB_DUR_CACHE.computeIfAbsent(cacheKey, k -> {
                 java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                 tags.put("db.system", dbSystem);
-                tags.put("db.operation", dbOperation);
+                tags.put("db.operation.name", dbOperation);
                 return com.agent.metric.MetricRegistry.get().histogram("db.client.operation.duration", tags);
             }).record(durationMs);
 
@@ -151,7 +151,7 @@ public final class JdbcStatementAdvice {
                 DB_ERR_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
                     java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                     tags.put("db.system", dbSystem);
-                    tags.put("db.operation", dbOperation);
+                    tags.put("db.operation.name", dbOperation);
                     return com.agent.metric.MetricRegistry.get().counter("db.client.operation.error.count", tags);
                 }).increment();
             }
@@ -182,10 +182,13 @@ public final class JdbcStatementAdvice {
     }
 
     public static void applyConnInfo(ConnInfo info, Span span) {
-        if (info.dbName   != null) span.setAttribute("db.name",       info.dbName);
-        if (info.peerName != null) span.setAttribute("net.peer.name", info.peerName);
-        if (info.peerPort != null) span.setAttribute("net.peer.port", info.peerPort);
-        if (info.dbUser   != null) span.setAttribute("db.user",       info.dbUser);
+        if (info.dbName   != null) span.setAttribute("db.namespace",    info.dbName);
+        if (info.peerName != null) span.setAttribute("server.address",  info.peerName);
+        if (info.peerPort != null) {
+            try { span.setAttribute("server.port", Long.parseLong(info.peerPort)); }
+            catch (NumberFormatException ignored) {}
+        }
+        if (info.dbUser   != null) span.setAttribute("db.user",         info.dbUser);
     }
 
     /** 최초 1회 reflection으로 ConnInfo를 구성한다. */
@@ -299,9 +302,12 @@ public final class JdbcStatementAdvice {
     static void parseJdbcUrl(String url, Span span) {
         String[] parts = parseJdbcUrl(url);
         if (parts == null) return;
-        if (parts[0] != null) span.setAttribute("db.name",       parts[0]);
-        if (parts[1] != null) span.setAttribute("net.peer.name", parts[1]);
-        if (parts[2] != null) span.setAttribute("net.peer.port", parts[2]);
+        if (parts[0] != null) span.setAttribute("db.namespace",   parts[0]);
+        if (parts[1] != null) span.setAttribute("server.address", parts[1]);
+        if (parts[2] != null) {
+            try { span.setAttribute("server.port", Long.parseLong(parts[2])); }
+            catch (NumberFormatException ignored) {}
+        }
     }
 
     /** SQL 첫 단어에서 db.operation 추출 (카디널리티 낮음: SELECT/INSERT/UPDATE/DELETE 등) */

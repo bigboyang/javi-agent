@@ -90,15 +90,15 @@ public final class MongoDbAdvice {
 
         // OTel DB 시맨틱 속성 — https://opentelemetry.io/docs/specs/semconv/database/
         span.setAttribute("db.system", "mongodb");
-        span.setAttribute("db.operation", dbOperation);
-        span.setAttribute("db.collection", collectionName);
+        span.setAttribute("db.operation.name", dbOperation);
+        span.setAttribute("db.collection.name", collectionName);
 
-        // db.name 추출 시도 (CommandMessage.getNamespace().getDatabaseName())
+        // db.namespace 추출 시도 (CommandMessage.getNamespace().getDatabaseName())
         try {
             Object namespace = commandMessage.getClass().getMethod("getNamespace").invoke(commandMessage);
             if (namespace != null) {
                 String dbName = (String) namespace.getClass().getMethod("getDatabaseName").invoke(namespace);
-                if (dbName != null) span.setAttribute("db.name", dbName);
+                if (dbName != null) span.setAttribute("db.namespace", dbName);
             }
         } catch (Throwable ignored) {}
 

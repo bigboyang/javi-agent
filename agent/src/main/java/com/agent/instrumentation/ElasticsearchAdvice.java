@@ -75,14 +75,13 @@ public final class ElasticsearchAdvice {
 
         // OTel DB 시맨틱 속성 (Elasticsearch는 db.system=elasticsearch로 분류)
         span.setAttribute("db.system", "elasticsearch");
-        if (httpMethod != null) span.setAttribute("elasticsearch.method", httpMethod);
-        if (endpoint != null)   span.setAttribute("elasticsearch.endpoint", endpoint);
+        if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
+        if (endpoint != null)   span.setAttribute("url.path", endpoint);
 
-        // http.url 조합 — 가능하면 호스트 정보 추가 (RestClient에서 접근 시도)
-        // RestClient는 host 목록을 내부에 보유하므로 첫 번째 노드 정보를 추출 시도
+        // url.full 조합 — RestClient는 호출 시점에 호스트를 선택하므로 onEnter에서는 path만 기록
         String baseUrl = extractBaseUrl(request);
         if (baseUrl != null && endpoint != null) {
-            span.setAttribute("http.url", baseUrl + endpoint);
+            span.setAttribute("url.full", baseUrl + endpoint);
         }
 
         Scope scope = span.makeCurrent();
@@ -116,7 +115,7 @@ public final class ElasticsearchAdvice {
                 Object statusLine = response.getClass().getMethod("getStatusLine").invoke(response);
                 if (statusLine != null) {
                     int statusCode = (int) statusLine.getClass().getMethod("getStatusCode").invoke(statusLine);
-                    state.span.setAttribute("http.response.status_code", String.valueOf(statusCode));
+                    state.span.setAttribute("http.response.status_code", (long) statusCode);
                     if (statusCode >= 400) {
                         state.span.setStatus(SpanStatus.ERROR, "HTTP " + statusCode);
                     }

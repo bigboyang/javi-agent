@@ -84,7 +84,7 @@ public final class WebFluxHandlerAdvice {
         Span span = builder.startSpan();
 
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
-        if (path != null)       span.setAttribute("http.target", path);
+        if (path != null)       span.setAttribute("url.path", path);
         span.setAttribute("http.framework", "spring-webflux");
 
         if (handler != null) {

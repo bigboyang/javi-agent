@@ -21,7 +21,7 @@ public final class RabbitMQAdvice {
                     .startSpan();
 
             span.setAttribute("messaging.system", "rabbitmq");
-            span.setAttribute("messaging.destination", routingKey);
+            span.setAttribute("messaging.destination.name", routingKey);
             span.setAttribute("messaging.operation", "send");
 
             return new State(span, span.makeCurrent());
@@ -57,7 +57,7 @@ public final class RabbitMQAdvice {
                     .startSpan();
 
             span.setAttribute("messaging.system", "rabbitmq");
-            span.setAttribute("messaging.destination", queue);
+            span.setAttribute("messaging.destination.name", queue);
             span.setAttribute("messaging.operation", "process");
 
             return new State(span, span.makeCurrent());

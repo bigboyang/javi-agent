@@ -185,9 +185,21 @@ public final class HttpServletAdvice {
         Span span = builder.startSpan();
 
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
-        if (uri != null)        span.setAttribute("http.target", uri);
-        if (scheme != null)     span.setAttribute("http.scheme", scheme);
-        if (host != null)       span.setAttribute("http.host", host);
+        if (uri != null)        span.setAttribute("url.path", uri);
+        if (scheme != null)     span.setAttribute("url.scheme", scheme);
+        if (host != null) {
+            int colon = host.lastIndexOf(':');
+            if (colon > 0 && !host.startsWith("[")) {
+                try {
+                    span.setAttribute("server.port", Long.parseLong(host.substring(colon + 1)));
+                    span.setAttribute("server.address", host.substring(0, colon));
+                } catch (NumberFormatException e) {
+                    span.setAttribute("server.address", host);
+                }
+            } else {
+                span.setAttribute("server.address", host);
+            }
+        }
 
         Scope scope = span.makeCurrent();
 
@@ -228,7 +240,7 @@ public final class HttpServletAdvice {
                 }
             }
             int statusCode = (int) mGetStatus.invoke(response);
-            state.span.setAttribute("http.response.status_code", String.valueOf(statusCode));
+            state.span.setAttribute("http.response.status_code", (long) statusCode);
             if (statusCode >= 400 && error == null) {
                 state.span.setStatus(SpanStatus.ERROR, "HTTP " + statusCode);
             }

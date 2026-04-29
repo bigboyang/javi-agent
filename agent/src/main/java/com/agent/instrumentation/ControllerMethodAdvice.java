@@ -334,10 +334,23 @@ public final class ControllerMethodAdvice {
         Span span = builder.startSpan();
 
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
-        if (uri != null)        span.setAttribute("http.target", uri);
+        if (uri != null)        span.setAttribute("url.path", uri);
         if (route != null)      span.setAttribute("http.route", route);
-        if (scheme != null)     span.setAttribute("http.scheme", scheme);
-        if (host != null)       span.setAttribute("http.host", host);
+        if (scheme != null)     span.setAttribute("url.scheme", scheme);
+        if (host != null) {
+            // "hostname:port" → server.address + server.port
+            int colon = host.lastIndexOf(':');
+            if (colon > 0 && !host.startsWith("[")) {
+                try {
+                    span.setAttribute("server.port", Long.parseLong(host.substring(colon + 1)));
+                    span.setAttribute("server.address", host.substring(0, colon));
+                } catch (NumberFormatException e) {
+                    span.setAttribute("server.address", host);
+                }
+            } else {
+                span.setAttribute("server.address", host);
+            }
+        }
 
         // 원격 설정에서 지정한 커스텀 헤더 캡처
         // Reuses the req object already resolved in the main block above — no
@@ -452,7 +465,7 @@ public final class ControllerMethodAdvice {
                     }
 
                     int statusCode = (int) mGetStatus.invoke(response);
-                    state.span.setAttribute("http.response.status_code", String.valueOf(statusCode));
+                    state.span.setAttribute("http.response.status_code", (long) statusCode);
                     // 4xx/5xx — exception 없이도 에러로 표시 (error rate 계산용)
                     if (statusCode >= 400 && error == null) {
                         state.span.setStatus(SpanStatus.ERROR, "HTTP " + statusCode);

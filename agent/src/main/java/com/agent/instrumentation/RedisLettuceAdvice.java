@@ -54,7 +54,7 @@ public final class RedisLettuceAdvice {
                 .startSpan();
 
         span.setAttribute("db.system", "redis");
-        span.setAttribute("db.operation", commandName);
+        span.setAttribute("db.operation.name", commandName);
 
         // net.peer.name / net.peer.port: Netty channel remote address
         extractPeerInfo(handler, span);
@@ -120,8 +120,8 @@ public final class RedisLettuceAdvice {
             Object remoteAddr = mRemoteAddr.invoke(channel);
             if (remoteAddr instanceof java.net.InetSocketAddress) {
                 java.net.InetSocketAddress addr = (java.net.InetSocketAddress) remoteAddr;
-                span.setAttribute("net.peer.name", addr.getHostString());
-                span.setAttribute("net.peer.port", String.valueOf(addr.getPort()));
+                span.setAttribute("server.address", addr.getHostString());
+                span.setAttribute("server.port", (long) addr.getPort());
             }
         } catch (Throwable ignored) {}
     }

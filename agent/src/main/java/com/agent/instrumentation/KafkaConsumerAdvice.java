@@ -60,15 +60,13 @@ public final class KafkaConsumerAdvice {
 
             Span span = builder.startSpan();
             span.setAttribute("messaging.system", "kafka");
-            span.setAttribute("messaging.destination", topic);
+            span.setAttribute("messaging.destination.name", topic);
             span.setAttribute("messaging.operation", "process");
-            span.setAttribute("messaging.kafka.source.partition",
-                    String.valueOf(record.partition()));
-            span.setAttribute("messaging.kafka.message.offset",
-                    String.valueOf(record.offset()));
+            span.setAttribute("messaging.kafka.message.partition", (long) record.partition());
+            span.setAttribute("messaging.kafka.message.offset", record.offset());
 
             Object key = record.key();
-            if (key != null) span.setAttribute("messaging.message_id", key.toString());
+            if (key != null) span.setAttribute("messaging.message.id", key.toString());
 
             span.end();
         }

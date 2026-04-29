@@ -35,19 +35,19 @@ public final class KafkaProducerAdvice {
                 .startSpan();
 
         span.setAttribute("messaging.system", "kafka");
-        span.setAttribute("messaging.destination", topic);
+        span.setAttribute("messaging.destination.name", topic);
         span.setAttribute("messaging.operation", "send");
 
         // partition (null = 브로커 자동 배정, 알 수 없으면 속성 생략)
         Integer partition = pr.partition();
         if (partition != null) {
-            span.setAttribute("messaging.kafka.destination.partition", String.valueOf(partition));
+            span.setAttribute("messaging.kafka.destination.partition", (long) partition);
         }
 
-        // message_id: 레코드 키
+        // message.id: 레코드 키
         Object key = pr.key();
         if (key != null) {
-            span.setAttribute("messaging.message_id", key.toString());
+            span.setAttribute("messaging.message.id", key.toString());
         }
 
         // W3C traceparent 주입 — sampled flag는 span.isRecording() 기반으로 결정
