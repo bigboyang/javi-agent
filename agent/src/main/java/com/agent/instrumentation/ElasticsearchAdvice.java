@@ -44,9 +44,10 @@ public final class ElasticsearchAdvice {
 
     private static volatile Method GET_METHOD = null;
     private static volatile Method GET_ENDPOINT = null;
+    private static volatile Method GET_NODES = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static State onEnter(@Advice.Argument(0) Object request) {
+    public static State onEnter(@Advice.This Object restClient, @Advice.Argument(0) Object request) {
 
         Span parentSpan = Context.currentSpan();
         if (!parentSpan.isRecording()) return null;
@@ -78,8 +79,8 @@ public final class ElasticsearchAdvice {
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (endpoint != null)   span.setAttribute("url.path", endpoint);
 
-        // url.full 조합 — RestClient는 호출 시점에 호스트를 선택하므로 onEnter에서는 path만 기록
-        String baseUrl = extractBaseUrl(request);
+        // url.full: extract first node host from RestClient.getNodes()
+        String baseUrl = extractBaseUrl(restClient);
         if (baseUrl != null && endpoint != null) {
             span.setAttribute("url.full", baseUrl + endpoint);
         }
@@ -161,14 +162,26 @@ public final class ElasticsearchAdvice {
     }
 
     /**
-     * Request 객체 자체에는 baseUrl이 없다.
-     * RestClient는 호출 시점에 호스트를 선택하므로 Request 단계에서는 URL을 알 수 없다.
-     * 이 메서드는 확장 가능성을 위해 남겨두되, 현재는 null을 반환한다.
-     * 실제 URL이 필요하다면 RestClient 자체를 계측(@This 사용)하거나
-     * Response에서 getHost()를 읽어 onExit에서 설정하는 방식이 더 적합하다.
+     * RestClient.getNodes() → first Node.getHost().toString() → "http://host:port"
+     * ES 6.x+ RestClient has getNodes() returning List<Node>; Node.getHost() returns HttpHost.
      */
-    private static String extractBaseUrl(Object request) {
-        return null;
+    private static String extractBaseUrl(Object restClient) {
+        if (restClient == null) return null;
+        try {
+            Method getNodes = GET_NODES;
+            if (getNodes == null) {
+                getNodes = restClient.getClass().getMethod("getNodes");
+                GET_NODES = getNodes;
+            }
+            java.util.List<?> nodes = (java.util.List<?>) getNodes.invoke(restClient);
+            if (nodes == null || nodes.isEmpty()) return null;
+            Object node = nodes.get(0);
+            Object host = node.getClass().getMethod("getHost").invoke(node);
+            if (host == null) return null;
+            return host.toString(); // HttpHost.toString() → "http://hostname:port"
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     public static final class State {

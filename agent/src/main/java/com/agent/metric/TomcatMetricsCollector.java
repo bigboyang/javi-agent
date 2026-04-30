@@ -35,6 +35,8 @@ public final class TomcatMetricsCollector {
 
     private TomcatMetricsCollector() {}
 
+    public static void start() {}
+
     public static void stop() {}
 
     static void collect() {

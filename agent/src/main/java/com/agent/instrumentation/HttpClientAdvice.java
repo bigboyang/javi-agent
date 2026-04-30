@@ -48,11 +48,13 @@ public final class HttpClientAdvice {
         span.setAttribute("http.request.method", method);
         if (url != null) {
             span.setAttribute("url.full", UrlSanitizer.sanitize(url.toString()));
-            span.setAttribute("server.address", url.getHost());
+            String host = url.getHost();
+            span.setAttribute("server.address", host);
             if (url.getPort() > 0) {
                 span.setAttribute("server.port", (long) url.getPort());
             }
             span.setAttribute("url.path", url.getPath() != null ? url.getPath() : "/");
+            if (host != null) span.setAttribute("peer.service", host);
         }
 
         Scope scope = span.makeCurrent();

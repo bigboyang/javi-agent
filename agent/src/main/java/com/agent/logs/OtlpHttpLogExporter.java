@@ -67,21 +67,24 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
     @Override
     public CompletableFuture<Void> export(Collection<LogRecord> logs) {
         if (isShutdown.get() || logs == null || logs.isEmpty()) return CompletableFuture.completedFuture(null);
+        byte[] protoBytes;
         try {
-            byte[] protoBytes = encodeExportRequest(logs, serviceName);
-            SendResult result = sender.send(LOG_PATH, protoBytes);
-
-            if (result == SendResult.SUCCESS) {
-                exportedCount.addAndGet(logs.size());
-            } else {
-                droppedCount.addAndGet(logs.size());
-                failedBatches.incrementAndGet();
-            }
+            protoBytes = encodeExportRequest(logs, serviceName);
         } catch (Exception e) {
             AgentLogger.warn("OtlpHttpLogExporter: 인코딩 오류 — " + e.getMessage());
             droppedCount.addAndGet(logs.size());
+            return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.completedFuture(null);
+        int batchSize = logs.size();
+        return sender.sendAsync(LOG_PATH, protoBytes).handle((result, ex) -> {
+            if (ex != null || result != SendResult.SUCCESS) {
+                droppedCount.addAndGet(batchSize);
+                failedBatches.incrementAndGet();
+            } else {
+                exportedCount.addAndGet(batchSize);
+            }
+            return null;
+        });
     }
 
     @Override

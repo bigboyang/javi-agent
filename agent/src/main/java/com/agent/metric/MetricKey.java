@@ -1,8 +1,9 @@
 package com.agent.metric;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.TreeMap;
 
 /**
  * 메트릭 이름과 속성(Attributes)의 조합으로 메트릭을 고유하게 식별한다.
@@ -13,7 +14,7 @@ public final class MetricKey {
 
     public MetricKey(String name, Map<String, String> attributes) {
         this.name = name;
-        this.attributes = attributes != null ? new TreeMap<>(attributes) : new TreeMap<>();
+        this.attributes = attributes != null ? new HashMap<>(attributes) : Collections.emptyMap();
     }
 
     @Override

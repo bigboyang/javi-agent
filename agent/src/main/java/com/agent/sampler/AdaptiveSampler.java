@@ -62,6 +62,11 @@ public final class AdaptiveSampler implements Sampler {
 
     @Override
     public SamplingDecision shouldSample(SpanContext parentContext, String traceId, String spanName, SpanKind spanKind) {
+        // OTel standard: honor parent sampling decision for non-root spans
+        if (parentContext != null && parentContext.isValid()) {
+            return parentContext.isSampled() ? SamplingDecision.RECORD_AND_SAMPLE : SamplingDecision.DROP;
+        }
+
         spanCount.incrementAndGet();
 
         if (traceId == null || traceId.length() < 16) {
@@ -70,8 +75,9 @@ public final class AdaptiveSampler implements Sampler {
 
         try {
             long low = Long.parseUnsignedLong(traceId.substring(traceId.length() - 16), 16);
-            long abs = low < 0 ? ~low : low;
-            return abs <= idUpperBound ? SamplingDecision.RECORD_AND_SAMPLE : SamplingDecision.DROP;
+            // Unsigned comparison: treats long as [0, 2^64) not [-2^63, 2^63)
+            return Long.compareUnsigned(low, idUpperBound) <= 0
+                    ? SamplingDecision.RECORD_AND_SAMPLE : SamplingDecision.DROP;
         } catch (NumberFormatException e) {
             return SamplingDecision.RECORD_AND_SAMPLE;
         }

@@ -184,8 +184,8 @@ public final class GrpcClientAdvice {
         if (ctx == null || !ctx.isValid()) return;
 
         try {
-            // traceparent 값 생성: "00-traceId-spanId-01"
-            String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-01";
+            String sampledFlag = span.isRecording() ? "01" : "00";
+            String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-" + sampledFlag;
 
             // Metadata.Key 캐싱
             Object key = TRACEPARENT_KEY;

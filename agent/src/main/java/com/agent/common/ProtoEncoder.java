@@ -1,6 +1,7 @@
 package com.agent.common;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayDeque;
 
 /**
  * Protobuf 바이너리 인코딩 유틸리티 (외부 라이브러리 불필요).
@@ -21,6 +22,22 @@ public final class ProtoEncoder {
     public static final int WIRE_32BIT  = 5;
 
     private ProtoEncoder() {}
+
+    // ---- ThreadLocal BAOS 풀 (packed 인코딩 내부 임시 버퍼용) ----
+
+    private static final ThreadLocal<ArrayDeque<ByteArrayOutputStream>> TL_POOL =
+            ThreadLocal.withInitial(ArrayDeque::new);
+
+    private static ByteArrayOutputStream borrow(int hint) {
+        ByteArrayOutputStream b = TL_POOL.get().poll();
+        if (b == null) b = new ByteArrayOutputStream(hint);
+        else b.reset();
+        return b;
+    }
+
+    private static void release(ByteArrayOutputStream b) {
+        TL_POOL.get().push(b);
+    }
 
     // ---- 태그 ----
 
@@ -160,26 +177,38 @@ public final class ProtoEncoder {
 
     public static void writePackedUint64(ByteArrayOutputStream out, int fieldNumber, long[] values) {
         if (values == null || values.length == 0) return;
-        ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 4);
-        for (long v : values) writeRawVarint64(packed, v);
-        writeTag(out, fieldNumber, WIRE_LEN);
-        writeLengthDelimited(out, packed.toByteArray());
+        ByteArrayOutputStream packed = borrow(values.length * 4);
+        try {
+            for (long v : values) writeRawVarint64(packed, v);
+            writeTag(out, fieldNumber, WIRE_LEN);
+            writeLengthDelimited(out, packed.toByteArray());
+        } finally {
+            release(packed);
+        }
     }
 
     public static void writePackedFixed64(ByteArrayOutputStream out, int fieldNumber, long[] values) {
         if (values == null || values.length == 0) return;
-        ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 8);
-        for (long v : values) writeFixed64(packed, v);
-        writeTag(out, fieldNumber, WIRE_LEN);
-        writeLengthDelimited(out, packed.toByteArray());
+        ByteArrayOutputStream packed = borrow(values.length * 8);
+        try {
+            for (long v : values) writeFixed64(packed, v);
+            writeTag(out, fieldNumber, WIRE_LEN);
+            writeLengthDelimited(out, packed.toByteArray());
+        } finally {
+            release(packed);
+        }
     }
 
     public static void writePackedDouble(ByteArrayOutputStream out, int fieldNumber, double[] values) {
         if (values == null || values.length == 0) return;
-        ByteArrayOutputStream packed = new ByteArrayOutputStream(values.length * 8);
-        for (double v : values) writeDouble(packed, v);
-        writeTag(out, fieldNumber, WIRE_LEN);
-        writeLengthDelimited(out, packed.toByteArray());
+        ByteArrayOutputStream packed = borrow(values.length * 8);
+        try {
+            for (double v : values) writeDouble(packed, v);
+            writeTag(out, fieldNumber, WIRE_LEN);
+            writeLengthDelimited(out, packed.toByteArray());
+        } finally {
+            release(packed);
+        }
     }
 
     // ---- Hex 변환 (traceId / spanId) ----

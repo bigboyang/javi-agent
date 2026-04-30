@@ -21,7 +21,7 @@ import org.slf4j.MDC;
  */
 public class LogbackAdvice {
 
-    @Advice.OnMethodEnter
+    @Advice.OnMethodEnter(suppress = Throwable.class)
     public static boolean onEnter(@Advice.Argument(0) Object event) {
         try {
             if (event instanceof ch.qos.logback.classic.spi.ILoggingEvent) {

@@ -32,6 +32,8 @@ public final class HikariMetricsCollector {
 
     private HikariMetricsCollector() {}
 
+    public static void start() {}
+
     public static void stop() {}
 
     static void collect() {

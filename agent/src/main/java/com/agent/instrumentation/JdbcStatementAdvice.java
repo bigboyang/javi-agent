@@ -189,6 +189,10 @@ public final class JdbcStatementAdvice {
             catch (NumberFormatException ignored) {}
         }
         if (info.dbUser   != null) span.setAttribute("db.user",         info.dbUser);
+        String peerService = info.peerName != null
+                ? info.dbSystem + "@" + info.peerName
+                : info.dbSystem;
+        span.setAttribute("peer.service", peerService);
     }
 
     /** 최초 1회 reflection으로 ConnInfo를 구성한다. */

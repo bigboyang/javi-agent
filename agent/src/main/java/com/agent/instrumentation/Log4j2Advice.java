@@ -21,7 +21,7 @@ import org.apache.logging.log4j.core.LogEvent;
  */
 public class Log4j2Advice {
 
-    @Advice.OnMethodEnter
+    @Advice.OnMethodEnter(suppress = Throwable.class)
     public static boolean onEnter(@Advice.Argument(0) Object event) {
         try {
             if (event instanceof LogEvent) {

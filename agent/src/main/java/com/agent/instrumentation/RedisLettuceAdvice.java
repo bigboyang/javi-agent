@@ -120,8 +120,10 @@ public final class RedisLettuceAdvice {
             Object remoteAddr = mRemoteAddr.invoke(channel);
             if (remoteAddr instanceof java.net.InetSocketAddress) {
                 java.net.InetSocketAddress addr = (java.net.InetSocketAddress) remoteAddr;
-                span.setAttribute("server.address", addr.getHostString());
+                String hostString = addr.getHostString();
+                span.setAttribute("server.address", hostString);
                 span.setAttribute("server.port", (long) addr.getPort());
+                span.setAttribute("peer.service", "redis-" + hostString);
             }
         } catch (Throwable ignored) {}
     }

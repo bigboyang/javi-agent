@@ -104,9 +104,10 @@ public final class LogBatchProcessor {
                     if (firstItem != null) {
                         batch.add(firstItem);
                         queue.drainTo(batch, maxBatchSize - 1);
-                        int batchSize = batch.size();
-                        exporter.export(new ArrayList<>(batch));
-                        exportedCounter.add(batchSize);
+                        final int batchSize = batch.size();
+                        // export() returns quickly (async); counter updated by exporter on success
+                        exporter.export(new ArrayList<>(batch)).whenComplete((v, ex) ->
+                                exportedCounter.add(batchSize));
                         batch.clear();
                         int qs = queue.size();
                         queueSizeGauge.set(qs);

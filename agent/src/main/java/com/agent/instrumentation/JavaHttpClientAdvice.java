@@ -2,6 +2,7 @@ package com.agent.instrumentation;
 
 import com.agent.common.utils.UrlSanitizer;
 import com.agent.span.Span;
+import com.agent.span.SpanContext;
 import com.agent.span.SpanKind;
 import com.agent.trace.Tracer;
 import net.bytebuddy.asm.Advice;
@@ -14,7 +15,7 @@ import java.net.http.HttpRequest;
 public final class JavaHttpClientAdvice {
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
-    public static State onEnter(@Advice.Argument(0) HttpRequest request) {
+    public static State onEnter(@Advice.Argument(value = 0, readOnly = false) HttpRequest request) {
         if (request == null) return null;
 
         Tracer tracer = AgentRuntime.getTracer("com.agent.instrumentation.http.java11");
@@ -29,10 +30,25 @@ public final class JavaHttpClientAdvice {
 
         span.setAttribute("http.request.method", method);
         span.setAttribute("url.full", UrlSanitizer.sanitize(request.uri().toString()));
+        if (host != null) span.setAttribute("peer.service", host);
 
-        // Java 11 HttpClient은 HttpRequest가 Immutable하므로, 
-        // 전파를 위해서는 Builder를 가로채거나 내부의 헤더 필드를 Reflection으로 수정해야 함.
-        // 여기서는 기본 스팬 생성만 수행.
+        // Inject W3C traceparent by rebuilding the immutable HttpRequest (Java 11 compatible)
+        SpanContext ctx = span.getContext();
+        if (ctx != null && ctx.isValid()) {
+            try {
+                String sampledFlag = span.isRecording() ? "01" : "00";
+                String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-" + sampledFlag;
+                HttpRequest.Builder rb = HttpRequest.newBuilder()
+                        .uri(request.uri())
+                        .method(request.method(),
+                                request.bodyPublisher().orElse(HttpRequest.BodyPublishers.noBody()));
+                request.timeout().ifPresent(rb::timeout);
+                request.headers().map().forEach((name, values) ->
+                        values.forEach(value -> rb.header(name, value)));
+                rb.header("traceparent", traceparent);
+                request = rb.build();
+            } catch (Throwable ignored) {}
+        }
 
         return new State(span, span.makeCurrent());
     }

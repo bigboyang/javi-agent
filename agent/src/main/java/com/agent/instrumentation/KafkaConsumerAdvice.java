@@ -2,6 +2,7 @@ package com.agent.instrumentation;
 
 import com.agent.propagation.MapTextMapGetter;
 import com.agent.propagation.TraceContextPropagator;
+import com.agent.span.Scope;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
 import com.agent.span.SpanKind;
@@ -59,16 +60,19 @@ public final class KafkaConsumerAdvice {
             }
 
             Span span = builder.startSpan();
-            span.setAttribute("messaging.system", "kafka");
-            span.setAttribute("messaging.destination.name", topic);
-            span.setAttribute("messaging.operation", "process");
-            span.setAttribute("messaging.kafka.message.partition", (long) record.partition());
-            span.setAttribute("messaging.kafka.message.offset", record.offset());
+            try (Scope scope = span.makeCurrent()) {
+                span.setAttribute("messaging.system", "kafka");
+                span.setAttribute("messaging.destination.name", topic);
+                span.setAttribute("messaging.operation", "process");
+                span.setAttribute("peer.service", "kafka");
+                span.setAttribute("messaging.kafka.message.partition", (long) record.partition());
+                span.setAttribute("messaging.kafka.message.offset", record.offset());
 
-            Object key = record.key();
-            if (key != null) span.setAttribute("messaging.message.id", key.toString());
-
-            span.end();
+                Object key = record.key();
+                if (key != null) span.setAttribute("messaging.message.id", key.toString());
+            } finally {
+                span.end();
+            }
         }
     }
 
