@@ -33,19 +33,22 @@ public final class AgentRuntime {
     static {
         AgentConfig config = AgentConfig.load();
         
-        // 전송 방식 통일: OTLP/HTTP Protobuf
-        OtlpHttpProtobufSender sharedSender = OtlpHttpProtobufSender.create(config.getExporterEndpoint(), 10_000L);
-        
-        SpanExporter spanExporter = buildSpanExporter(config, sharedSender);
-        
-        // 로그 및 메트릭 Exporter도 Protobuf Sender 공유
+        // 신호 유형별 독립 Circuit Breaker: 각 신호 타입은 별도 Sender 인스턴스를 사용해야
+        // 한 신호의 연속 실패가 다른 신호의 전송을 차단하지 않는다.
+        String endpoint = config.getExporterEndpoint();
+        OtlpHttpProtobufSender spanSender   = OtlpHttpProtobufSender.create(endpoint, 10_000L, "traces");
+        OtlpHttpProtobufSender logSender    = OtlpHttpProtobufSender.create(endpoint, 10_000L, "logs");
+        OtlpHttpProtobufSender metricSender = OtlpHttpProtobufSender.create(endpoint, 10_000L, "metrics");
+
+        SpanExporter spanExporter = buildSpanExporter(config, spanSender);
+
         SdkLoggerProvider loggerProvider = new SdkLoggerProvider(
-                new OtlpHttpLogExporter(config.getServiceName(), sharedSender));
-        
+                new OtlpHttpLogExporter(config.getServiceName(), logSender));
+
         SdkMeterProvider meterProvider = new SdkMeterProvider(
                 CompositeMetricExporter.of(
                         new FileMetricExporter(),
-                        new OtlpHttpMetricExporter(config.getServiceName(), sharedSender)));
+                        new OtlpHttpMetricExporter(config.getServiceName(), metricSender)));
 
         AgentLogger.info("전송 프로토콜: OTLP/HTTP Protobuf (endpoint=" + config.getExporterEndpoint() + ")");
 

@@ -58,6 +58,7 @@ public final class OtlpHttpProtobufSender {
 
     private final String baseEndpoint;
     private final long   timeoutMs;
+    private final String signalType;
     private final ExecutorService httpExecutor;
     private final HttpClient httpClient;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
@@ -65,9 +66,10 @@ public final class OtlpHttpProtobufSender {
     private final boolean gzipEnabled;
     private final ScheduledExecutorService retryScheduler;
 
-    private OtlpHttpProtobufSender(String baseEndpoint, long timeoutMs) {
+    private OtlpHttpProtobufSender(String baseEndpoint, long timeoutMs, String signalType) {
         this.baseEndpoint  = baseEndpoint.replaceAll("/+$", "");
         this.timeoutMs     = timeoutMs;
+        this.signalType    = (signalType != null && !signalType.isEmpty()) ? signalType : "unknown";
         this.extraHeaders  = parseHeaders();
         this.gzipEnabled   = resolveGzipEnabled();
 
@@ -98,11 +100,15 @@ public final class OtlpHttpProtobufSender {
     }
 
     public static OtlpHttpProtobufSender create() {
-        return new OtlpHttpProtobufSender(resolveEndpoint(), resolveTimeoutMs());
+        return new OtlpHttpProtobufSender(resolveEndpoint(), resolveTimeoutMs(), "traces");
     }
 
     public static OtlpHttpProtobufSender create(String baseEndpoint, long timeoutMs) {
-        return new OtlpHttpProtobufSender(baseEndpoint, timeoutMs);
+        return new OtlpHttpProtobufSender(baseEndpoint, timeoutMs, "traces");
+    }
+
+    public static OtlpHttpProtobufSender create(String baseEndpoint, long timeoutMs, String signalType) {
+        return new OtlpHttpProtobufSender(baseEndpoint, timeoutMs, signalType);
     }
 
     public SendResult send(String path, byte[] protoBody) {
@@ -240,13 +246,15 @@ public final class OtlpHttpProtobufSender {
     private void recordCbMetric(CbState state) {
         try {
             int val = state == CbState.CLOSED ? 0 : state == CbState.HALF_OPEN ? 1 : 2;
-            MetricRegistry.get().gauge("javi.otlp.circuit_breaker.state", Collections.emptyMap()).set(val);
+            Map<String, String> attrs = Collections.singletonMap("signal", signalType);
+            MetricRegistry.get().gauge("javi.otlp.circuit_breaker.state", attrs).set(val);
         } catch (Exception ignored) {}
     }
 
     private void recordCounter(String name, long delta) {
         try {
-            MetricRegistry.get().counter(name, Collections.emptyMap()).add(delta);
+            Map<String, String> attrs = Collections.singletonMap("signal", signalType);
+            MetricRegistry.get().counter(name, attrs).add(delta);
         } catch (Exception ignored) {}
     }
 

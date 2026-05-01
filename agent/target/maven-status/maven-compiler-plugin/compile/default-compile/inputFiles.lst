@@ -4,6 +4,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/UrlSanitizer.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/exporter/OtlpHttpSpanExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/profiling/ThreadSamplingBackend.java
+/Users/kkc/APM/agent/src/main/java/com/agent/common/AbstractBatchProcessor.java
 /Users/kkc/APM/agent/src/main/java/com/agent/concurrent/ContextPropagatingRunnable.java
 /Users/kkc/APM/agent/src/main/java/com/agent/propagation/Baggage.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcStatementAdvice.java
