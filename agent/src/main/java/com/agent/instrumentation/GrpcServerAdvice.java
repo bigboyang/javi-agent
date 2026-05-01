@@ -46,12 +46,22 @@ public final class GrpcServerAdvice {
     public static volatile Method METADATA_GET_METHOD     = null;
     public static volatile Object ASCII_STRING_MARSHALLER = null;
 
+    // Field / Method reflection 캐시 — getDeclaredField 반복 호출 방지 (GrpcClientAdvice 패턴)
+    public static volatile Field  LISTENER_HEADERS_FIELD            = null;
+    public static volatile Field  LISTENER_RESPONSE_OBSERVER_FIELD  = null;
+    public static volatile Field  RESPONSE_OBSERVER_CALL_FIELD      = null;
+    public static volatile Method GET_METHOD_DESCRIPTOR_METHOD      = null;
+    public static volatile Method GET_FULL_METHOD_NAME_METHOD       = null;
+
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(@Advice.This Object listener) {
 
         // 1. gRPC Metadata에서 traceparent / tracestate 추출
         SpanContext remoteParent = null;
-        Object headers = getField(listener, "headers");
+        Field hf = LISTENER_HEADERS_FIELD;
+        if (hf == null) { hf = findField(listener.getClass(), "headers"); LISTENER_HEADERS_FIELD = hf; }
+        Object headers = null;
+        try { if (hf != null) headers = hf.get(listener); } catch (Throwable ignored) {}
         if (headers != null) {
             String traceparent = readMetadataHeader(headers, "traceparent");
             if (traceparent != null) {
@@ -183,24 +193,45 @@ public final class GrpcServerAdvice {
     /**
      * listener → responseObserver → call → MethodDescriptor → getFullMethodName() 경로로
      * "package.ServiceName/MethodName" 형식의 전체 메서드명을 반환한다.
+     * Field / Method 결과는 static 캐시에 저장해 getDeclaredField 반복 호출을 방지한다.
      */
     private static String extractFullMethodName(Object listener) {
         try {
-            // UnaryServerCallListener.responseObserver → ServerCallStreamObserverImpl
-            Object responseObserver = getField(listener, "responseObserver");
+            // listener.responseObserver 필드 캐싱
+            Field roField = LISTENER_RESPONSE_OBSERVER_FIELD;
+            if (roField == null) {
+                roField = findField(listener.getClass(), "responseObserver");
+                LISTENER_RESPONSE_OBSERVER_FIELD = roField;
+            }
+            if (roField == null) return null;
+            Object responseObserver = roField.get(listener);
             if (responseObserver == null) return null;
 
-            // ServerCallStreamObserverImpl.call → ServerCallImpl
-            Object call = getField(responseObserver, "call");
+            // responseObserver.call 필드 캐싱
+            Field callField = RESPONSE_OBSERVER_CALL_FIELD;
+            if (callField == null) {
+                callField = findField(responseObserver.getClass(), "call");
+                RESPONSE_OBSERVER_CALL_FIELD = callField;
+            }
+            if (callField == null) return null;
+            Object call = callField.get(responseObserver);
             if (call == null) return null;
 
-            // ServerCall.getMethodDescriptor()
-            Method getDesc = call.getClass().getMethod("getMethodDescriptor");
+            // ServerCall.getMethodDescriptor() 메서드 캐싱
+            Method getDesc = GET_METHOD_DESCRIPTOR_METHOD;
+            if (getDesc == null) {
+                getDesc = call.getClass().getMethod("getMethodDescriptor");
+                GET_METHOD_DESCRIPTOR_METHOD = getDesc;
+            }
             Object descriptor = getDesc.invoke(call);
             if (descriptor == null) return null;
 
-            // MethodDescriptor.getFullMethodName()
-            Method getFullName = descriptor.getClass().getMethod("getFullMethodName");
+            // MethodDescriptor.getFullMethodName() 메서드 캐싱
+            Method getFullName = GET_FULL_METHOD_NAME_METHOD;
+            if (getFullName == null) {
+                getFullName = descriptor.getClass().getMethod("getFullMethodName");
+                GET_FULL_METHOD_NAME_METHOD = getFullName;
+            }
             return (String) getFullName.invoke(descriptor);
 
         } catch (Throwable t) {
@@ -209,17 +240,15 @@ public final class GrpcServerAdvice {
     }
 
     /**
-     * 클래스 계층을 탐색해 필드 값을 반환한다.
-     * getDeclaredField는 현재 클래스만 검색하므로 superclass까지 순회한다.
+     * 클래스 계층을 순회해 필드를 탐색하고 accessible 처리 후 반환한다.
+     * 값을 읽지 않으므로 호출 측이 캐시에 저장해 재사용할 수 있다.
      */
-    private static Object getField(Object obj, String fieldName) {
-        if (obj == null) return null;
-        Class<?> clazz = obj.getClass();
+    private static Field findField(Class<?> clazz, String fieldName) {
         while (clazz != null) {
             try {
                 Field f = clazz.getDeclaredField(fieldName);
                 f.setAccessible(true);
-                return f.get(obj);
+                return f;
             } catch (NoSuchFieldException e) {
                 clazz = clazz.getSuperclass();
             } catch (Throwable t) {
