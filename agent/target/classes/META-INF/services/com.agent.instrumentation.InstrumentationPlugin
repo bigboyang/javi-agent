@@ -20,3 +20,9 @@ com.agent.instrumentation.plugin.CompletableFutureInstrumentationPlugin
 com.agent.instrumentation.plugin.SpringAsyncInstrumentationPlugin
 com.agent.instrumentation.plugin.LogbackInstrumentationPlugin
 com.agent.instrumentation.plugin.Log4j2InstrumentationPlugin
+com.agent.instrumentation.plugin.AsyncMongoDbInstrumentationPlugin
+com.agent.instrumentation.plugin.ElasticsearchAsyncInstrumentationPlugin
+com.agent.instrumentation.plugin.JedisInstrumentationPlugin
+com.agent.instrumentation.plugin.WebClientInstrumentationPlugin
+com.agent.instrumentation.plugin.FeignClientInstrumentationPlugin
+com.agent.instrumentation.plugin.OkHttpInstrumentationPlugin
