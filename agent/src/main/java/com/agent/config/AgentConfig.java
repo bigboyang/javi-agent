@@ -43,7 +43,7 @@ public final class AgentConfig {
         String service = read("JAVI_SERVICE_NAME", "javi.service.name", DEFAULT_SERVICE_NAME);
         double rate = parseDouble(read("JAVI_SAMPLE_RATE", "javi.sample.rate", String.valueOf(DEFAULT_SAMPLE_RATE)));
 
-        long slowThreshold = parseLong(read("JAVI_SLOW_THRESHOLD_MS", "javi.slow.threshold.ms", "500"));
+        long slowThreshold = parseLong(read("JAVI_SLOW_THRESHOLD_MS", "javi.slow.threshold.ms", "500"), 500L);
 
         String urlsRaw = read("JAVI_CRITICAL_URLS", "javi.critical.urls", "");
         List<String> urls = Arrays.stream(urlsRaw.split(","))
@@ -52,7 +52,7 @@ public final class AgentConfig {
                 .collect(Collectors.toList());
 
         int minSamples = Integer.parseInt(read("JAVI_CLUSTER_MIN_SAMPLES", "javi.cluster.min.samples", "5"));
-        long targetSps = parseLong(read("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"));
+        long targetSps = parseLong(read("JAVI_SAMPLING_TARGET_SPS", "javi.sampling.target.sps", "0"), 0L);
 
         com.agent.logs.AgentLogger.info("[AgentConfig] OTLP/HTTP Protobuf 전송 설정 로드됨: endpoint=" + endpoint + ", service=" + service);
         
@@ -78,7 +78,7 @@ public final class AgentConfig {
         try { return Double.parseDouble(s); } catch (Exception e) { return DEFAULT_SAMPLE_RATE; }
     }
 
-    private static long parseLong(String s) {
-        try { return Long.parseLong(s); } catch (Exception e) { return 500L; }
+    private static long parseLong(String s, long defaultValue) {
+        try { return Long.parseLong(s); } catch (Exception e) { return defaultValue; }
     }
 }
