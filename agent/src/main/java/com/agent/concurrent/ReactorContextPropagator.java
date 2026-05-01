@@ -21,6 +21,9 @@ public final class ReactorContextPropagator {
     /** Reactor Context에 span을 저장할 때 사용하는 키. */
     public static final String SPAN_KEY = "javi-apm.span";
 
+    /** Reactor Context에 MDC 스냅샷을 저장할 때 사용하는 키. */
+    public static final String MDC_KEY = "javi-apm.mdc";
+
     private static volatile boolean installed = false;
     private static final String HOOK_KEY = "javi-apm";
 

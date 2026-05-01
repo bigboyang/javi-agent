@@ -89,7 +89,20 @@ public final class ContextSnapshot {
             Boolean recording = (Boolean) span.getClass().getMethod("isRecording").invoke(span);
             if (!Boolean.TRUE.equals(recording)) return null;
 
-            return new Object[]{span, null};
+            // Reactor Context에서 MDC 스냅샷도 추출한다.
+            Map<String, String> mdc = null;
+            try {
+                Object mdcObj = reactorContext.getClass()
+                        .getMethod("getOrDefault", Object.class, Object.class)
+                        .invoke(reactorContext, ReactorContextPropagator.MDC_KEY, null);
+                if (mdcObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> mdcMap = (Map<String, String>) mdcObj;
+                    mdc = mdcMap;
+                }
+            } catch (Throwable ignored) {}
+
+            return new Object[]{span, mdc};
         } catch (Throwable t) {
             return null;
         }

@@ -34,11 +34,12 @@ import java.lang.reflect.Method;
  *  5. operator : Schedulers 훅이 publishOn/subscribeOn 경계에서 span 전파
  *  6. Mono 종료 : doOnError → span 오류 기록, doFinally → span.end()
  *
- * === 한계 ===
- * - MDC(traceId/spanId)는 Netty 진입 스레드에서만 설정 후 즉시 복원된다.
- *   Reactor 스케줄러 스레드의 MDC는 ContextPropagatingRunnable이 span 정보를
- *   snapshot으로 캡처할 때 이미 복원된 이전 값으로 캡처된다.
- *   → 추후 Reactor contextWrite() 기반 전파로 개선 가능.
+ * === MDC 전파 ===
+ * - MDC는 onExit에서 restoreMdc() 호출 전에 스냅샷으로 캡처되어
+ *   contextWrite로 Reactor Context에 저장된다.
+ *   publishOn/subscribeOn 경계에서 ContextPropagatingRunnable이
+ *   CoreSubscriber.currentContext()를 통해 MDC 스냅샷을 꺼내어
+ *   스케줄러 스레드에 복원한다.
  */
 public final class WebFluxHandlerAdvice {
 
@@ -137,11 +138,13 @@ public final class WebFluxHandlerAdvice {
             return;
         }
 
-        // MDC를 Netty 스레드에서 즉시 복원한다.
-        // scope는 열린 채로 유지: Reactor Schedulers 훅이 publishOn 시 span을 ThreadLocal에서 캡처한다.
+        // traceId/spanId가 설정된 현재 MDC를 캡처한 후 Netty 스레드를 즉시 복원한다.
+        // 캡처된 스냅샷은 contextWrite로 Reactor Context에 저장되어
+        // publishOn/subscribeOn 경계에서 스케줄러 스레드의 MDC로 복원된다.
+        java.util.Map<String, String> traceMdc = captureMdcSnapshot();
         restoreMdc(state);
 
-        Object wrapped = wrapMonoWithLifecycle(returnMono, state);
+        Object wrapped = wrapMonoWithLifecycle(returnMono, state, traceMdc);
         if (wrapped != null) {
             returnMono = wrapped;
         } else {
@@ -157,15 +160,16 @@ public final class WebFluxHandlerAdvice {
      * doOnSubscribe  : scope.close() — Netty 스레드의 ThreadLocal 정리 (구독 시점)
      * doOnError      : span 오류 기록
      * doFinally      : span.end() — complete / error / cancel 모두 처리
-     * contextWrite   : span을 Reactor Context에 저장 — publishOn/subscribeOn 경계에서
-     *                  ContextPropagatingRunnable이 CoreSubscriber.currentContext()를 통해
-     *                  span을 캡처할 수 있도록 한다. 체인의 마지막에 위치해야 모든 upstream
-     *                  operator가 Context를 볼 수 있다.
+     * contextWrite   : span과 MDC 스냅샷을 Reactor Context에 저장 — publishOn/subscribeOn
+     *                  경계에서 ContextPropagatingRunnable이 CoreSubscriber.currentContext()를
+     *                  통해 span과 MDC를 캡처할 수 있도록 한다. 체인의 마지막에 위치해야
+     *                  모든 upstream operator가 Context를 볼 수 있다.
      *
      * 람다 본문은 에이전트 클래스로더 타입(Scope, Span, SpanStatus)만 사용하므로
      * 크로스 클래스로더 이슈가 없다. Reactor는 Consumer/Function 인터페이스로만 호출한다.
      */
-    private static Object wrapMonoWithLifecycle(Object mono, final State state) {
+    private static Object wrapMonoWithLifecycle(Object mono, final State state,
+                                                  java.util.Map<String, String> traceMdc) {
         try {
             java.util.function.Consumer<Object> onSubscribe = subscriber -> {
                 try { state.scope.close(); } catch (Throwable ignored) {}
@@ -193,16 +197,24 @@ public final class WebFluxHandlerAdvice {
                     .getMethod("doFinally", java.util.function.Consumer.class)
                     .invoke(m2, onFinally);
 
-            // span을 Reactor Context에 저장.
+            // span과 MDC 스냅샷을 Reactor Context에 저장.
             // contextWrite는 subscribe 시점에 Context를 구성하며 upstream 방향으로 전파된다.
-            // 체인 맨 마지막에 추가해야 user Mono의 publishOn 등 모든 operator가 span을 볼 수 있다.
+            // 체인 맨 마지막에 추가해야 user Mono의 publishOn 등 모든 operator가 Context를 볼 수 있다.
             final String spanKey = com.agent.concurrent.ReactorContextPropagator.SPAN_KEY;
+            final String mdcKey = com.agent.concurrent.ReactorContextPropagator.MDC_KEY;
             final Span spanRef = state.span;
+            final java.util.Map<String, String> mdcSnapshot = traceMdc;
             java.util.function.Function<Object, Object> ctxModifier = ctx -> {
                 try {
-                    return ctx.getClass()
+                    Object ctx2 = ctx.getClass()
                             .getMethod("put", Object.class, Object.class)
                             .invoke(ctx, spanKey, spanRef);
+                    if (mdcSnapshot != null && !mdcSnapshot.isEmpty()) {
+                        ctx2 = ctx2.getClass()
+                                .getMethod("put", Object.class, Object.class)
+                                .invoke(ctx2, mdcKey, mdcSnapshot);
+                    }
+                    return ctx2;
                 } catch (Throwable ignored) {
                     return ctx;
                 }
@@ -215,6 +227,15 @@ public final class WebFluxHandlerAdvice {
 
         } catch (Throwable t) {
             AgentLogger.debug("[WebFlux] Mono 라이프사이클 래핑 실패: " + t.getMessage());
+            return null;
+        }
+    }
+
+    private static java.util.Map<String, String> captureMdcSnapshot() {
+        try {
+            java.util.Map<String, String> mdc = MDC.getCopyOfContextMap();
+            return (mdc != null && !mdc.isEmpty()) ? mdc : null;
+        } catch (Throwable ignored) {
             return null;
         }
     }
