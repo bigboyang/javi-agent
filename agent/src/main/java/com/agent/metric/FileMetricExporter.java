@@ -1,6 +1,7 @@
 package com.agent.metric;
 
 import com.agent.common.DataExporter;
+import com.agent.logs.MetricLogger;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 

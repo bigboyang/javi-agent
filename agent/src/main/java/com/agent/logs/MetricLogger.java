@@ -116,6 +116,10 @@ public final class MetricLogger {
         }
     }
 
+    public static void log(String message) {
+        LOGGER.info(message);
+    }
+
     public static String logFilePath() {
         return LOG_FILE_PATH;
     }

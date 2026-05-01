@@ -154,7 +154,6 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/VirtualThreadExecutorAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/profiling/ProfilingExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/common/utils/time/Clock.java
-/Users/kkc/APM/agent/src/main/java/com/agent/metric/MetricLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/HikariMetricsCollector.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/LogLogger.java
 /Users/kkc/APM/agent/src/main/java/com/agent/profiling/PprofEncoder.java
