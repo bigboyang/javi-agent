@@ -157,9 +157,13 @@ public final class WebFluxHandlerAdvice {
      * doOnSubscribe  : scope.close() — Netty 스레드의 ThreadLocal 정리 (구독 시점)
      * doOnError      : span 오류 기록
      * doFinally      : span.end() — complete / error / cancel 모두 처리
+     * contextWrite   : span을 Reactor Context에 저장 — publishOn/subscribeOn 경계에서
+     *                  ContextPropagatingRunnable이 CoreSubscriber.currentContext()를 통해
+     *                  span을 캡처할 수 있도록 한다. 체인의 마지막에 위치해야 모든 upstream
+     *                  operator가 Context를 볼 수 있다.
      *
      * 람다 본문은 에이전트 클래스로더 타입(Scope, Span, SpanStatus)만 사용하므로
-     * 크로스 클래스로더 이슈가 없다. Reactor는 Consumer 인터페이스로만 호출한다.
+     * 크로스 클래스로더 이슈가 없다. Reactor는 Consumer/Function 인터페이스로만 호출한다.
      */
     private static Object wrapMonoWithLifecycle(Object mono, final State state) {
         try {
@@ -185,9 +189,29 @@ public final class WebFluxHandlerAdvice {
             java.util.function.Consumer<Object> onFinally = signalType -> {
                 try { state.span.end(); } catch (Throwable ignored) {}
             };
-            return m2.getClass()
+            Object m3 = m2.getClass()
                     .getMethod("doFinally", java.util.function.Consumer.class)
                     .invoke(m2, onFinally);
+
+            // span을 Reactor Context에 저장.
+            // contextWrite는 subscribe 시점에 Context를 구성하며 upstream 방향으로 전파된다.
+            // 체인 맨 마지막에 추가해야 user Mono의 publishOn 등 모든 operator가 span을 볼 수 있다.
+            final String spanKey = com.agent.concurrent.ReactorContextPropagator.SPAN_KEY;
+            final Span spanRef = state.span;
+            java.util.function.Function<Object, Object> ctxModifier = ctx -> {
+                try {
+                    return ctx.getClass()
+                            .getMethod("put", Object.class, Object.class)
+                            .invoke(ctx, spanKey, spanRef);
+                } catch (Throwable ignored) {
+                    return ctx;
+                }
+            };
+            Object m4 = m3.getClass()
+                    .getMethod("contextWrite", java.util.function.Function.class)
+                    .invoke(m3, ctxModifier);
+
+            return m4;
 
         } catch (Throwable t) {
             AgentLogger.debug("[WebFlux] Mono 라이프사이클 래핑 실패: " + t.getMessage());

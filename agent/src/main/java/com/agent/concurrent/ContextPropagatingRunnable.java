@@ -36,12 +36,19 @@ public final class ContextPropagatingRunnable implements Runnable {
     /**
      * 현재 활성 span이 있으면 래핑, 없으면 원본 반환.
      * 이미 래핑된 경우 이중 래핑 방지.
+     *
+     * ThreadLocal에 span이 없으면 Runnable의 Reactor Context를 폴백으로 시도한다.
+     * publishOn(boundedElastic()) 경계에서 scope가 이미 닫혀있어도 propagation이 유지된다.
      */
     public static Runnable wrap(Runnable runnable) {
         if (runnable == null || runnable instanceof ContextPropagatingRunnable) {
             return runnable;
         }
         Object[] snapshot = ContextSnapshot.capture();
+        if (snapshot == null) {
+            // ThreadLocal이 비어 있으면 Reactor Context(CoreSubscriber.currentContext())에서 폴백
+            snapshot = ContextSnapshot.captureFromReactorContext(runnable);
+        }
         if (snapshot == null) return runnable;
         return new ContextPropagatingRunnable(runnable, snapshot);
     }

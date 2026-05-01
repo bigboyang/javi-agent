@@ -64,6 +64,38 @@ public final class ContextSnapshot {
     }
 
     /**
+     * Reactor Context에서 span을 캡처한다.
+     *
+     * publishOn/subscribeOn 경계에서 ThreadLocal이 비어있는 경우 폴백으로 호출된다.
+     * 대상 Runnable이 reactor.core.CoreSubscriber를 구현하면 currentContext()로 Reactor Context에
+     * 접근하여 span을 추출한다.
+     *
+     * @param runnable Schedulers.onScheduleHook에 전달된 Runnable (PublishOnSubscriber 등)
+     * @return [span, null] 또는 null
+     */
+    public static Object[] captureFromReactorContext(Runnable runnable) {
+        try {
+            // CoreSubscriber.currentContext() — PublishOnSubscriber 등 Reactor 내부 타입에 존재
+            java.lang.reflect.Method currentContextMethod =
+                    runnable.getClass().getMethod("currentContext");
+            Object reactorContext = currentContextMethod.invoke(runnable);
+            if (reactorContext == null) return null;
+
+            Object span = reactorContext.getClass()
+                    .getMethod("getOrDefault", Object.class, Object.class)
+                    .invoke(reactorContext, ReactorContextPropagator.SPAN_KEY, null);
+            if (span == null) return null;
+
+            Boolean recording = (Boolean) span.getClass().getMethod("isRecording").invoke(span);
+            if (!Boolean.TRUE.equals(recording)) return null;
+
+            return new Object[]{span, null};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
      * 캡처된 컨텍스트를 현재 스레드에 복원한다.
      *
      * @param snapshot capture()가 반환한 배열
