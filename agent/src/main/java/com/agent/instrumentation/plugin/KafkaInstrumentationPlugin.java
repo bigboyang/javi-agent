@@ -24,11 +24,15 @@ public class KafkaInstrumentationPlugin implements InstrumentationPlugin {
                 .installOn(inst);
 
         agentBuilder
-                .type(ElementMatchers.named("org.apache.kafka.clients.consumer.KafkaConsumer"))
+                .type(ElementMatchers.named(
+                        "org.springframework.kafka.listener.adapter.MessagingMessageListenerAdapter"))
                 .transform((builder, type, classLoader, module, protectionDomain) ->
                         builder.visit(Advice.to(KafkaConsumerAdvice.class)
-                                .on(ElementMatchers.named("poll")
-                                        .and(ElementMatchers.takesArguments(1).or(ElementMatchers.takesArguments(2))))))
+                                .on(ElementMatchers.named("onMessage")
+                                        .and(ElementMatchers.takesArgument(
+                                                0,
+                                                ElementMatchers.named(
+                                                        "org.apache.kafka.clients.consumer.ConsumerRecord"))))))
                 .installOn(inst);
     }
 }
