@@ -37,13 +37,13 @@ public final class JdbcStatementAdvice {
     public static final ConcurrentHashMap<Class<?>, Method> GET_USERNAME_CACHE    = new ConcurrentHashMap<>(4);
 
     /**
-     * DB 연결 메타데이터 캐시 (커넥션 클래스 → ConnInfo).
+     * DB 연결 메타데이터 캐시 (JDBC URL → ConnInfo).
      *
-     * <p>커넥션 풀 내 모든 커넥션은 같은 DataSource를 공유하므로
-     * 클래스가 동일하면 vendor/URL/user도 동일하다 (단일 DataSource 기준).
-     * Datadog Agent, OTel Java SDK 모두 동일한 per-class 캐싱 전략을 사용한다.
+     * <p>동일 드라이버 클래스를 공유하는 멀티 DataSource 환경에서도
+     * JDBC URL을 키로 사용하여 각 DataSource의 메타데이터를 정확히 분리한다.
+     * URL 미확보 시 커넥션 클래스명으로 fallback한다.
      */
-    public static final ConcurrentHashMap<Class<?>, ConnInfo> CONN_INFO_CACHE = new ConcurrentHashMap<>(4);
+    public static final ConcurrentHashMap<String, ConnInfo> CONN_INFO_CACHE = new ConcurrentHashMap<>(4);
 
     /** 불변 DB 연결 메타데이터 홀더 */
     public static final class ConnInfo {
@@ -163,20 +163,50 @@ public final class JdbcStatementAdvice {
     /**
      * DB 연결 메타데이터를 스팬에 적용한다.
      *
-     * <p>ConnInfo는 커넥션 클래스별로 캐싱되므로, 동일 DataSource의 커넥션에 대해
-     * reflection 조회는 최초 1회만 수행된다.
+     * <p>JDBC URL을 DataSource 식별 키로 사용하므로, 동일 드라이버 클래스를 공유하는
+     * 멀티 DataSource 환경에서도 각 DataSource의 메타데이터를 정확히 분리·캐싱한다.
      *
      * @return dbSystem 문자열 (예: "mysql", "postgresql")
      */
     public static String extractConnMetadata(Object conn, Span span) {
         Class<?> connClass = conn.getClass();
-        ConnInfo cached = CONN_INFO_CACHE.get(connClass);
+
+        // meta 객체와 URL을 먼저 확보 — URL이 DataSource 식별 키
+        Object meta = null;
+        Class<?> metaClass = null;
+        String url = null;
+        try {
+            Method mGetMeta = GET_META_CACHE.get(connClass);
+            if (mGetMeta == null) {
+                mGetMeta = connClass.getMethod("getMetaData");
+                GET_META_CACHE.put(connClass, mGetMeta);
+            }
+            meta = mGetMeta.invoke(conn);
+            if (meta != null) {
+                metaClass = meta.getClass();
+                Method mGetUrl = GET_URL_CACHE.get(metaClass);
+                if (mGetUrl == null) {
+                    mGetUrl = metaClass.getMethod("getURL");
+                    GET_URL_CACHE.put(metaClass, mGetUrl);
+                }
+                url = (String) mGetUrl.invoke(meta);
+            }
+        } catch (Throwable ignored) {}
+
+        // 동일 드라이버 클래스를 공유하는 멀티 DataSource 구분: URL을 키로 사용
+        // URL 미확보 시 클래스명으로 fallback
+        String cacheKey = (url != null && !url.isEmpty()) ? url : connClass.getName();
+
+        ConnInfo cached = CONN_INFO_CACHE.get(cacheKey);
         if (cached != null) {
             applyConnInfo(cached, span);
             return cached.dbSystem;
         }
-        ConnInfo info = resolveConnInfo(conn, connClass);
-        CONN_INFO_CACHE.put(connClass, info);
+
+        ConnInfo info = (meta != null && metaClass != null)
+                ? resolveConnInfo(meta, metaClass, url)
+                : ConnInfo.UNKNOWN;
+        CONN_INFO_CACHE.put(cacheKey, info);
         applyConnInfo(info, span);
         return info.dbSystem;
     }
@@ -195,19 +225,14 @@ public final class JdbcStatementAdvice {
         span.setAttribute("peer.service", peerService);
     }
 
-    /** 최초 1회 reflection으로 ConnInfo를 구성한다. */
-    public static ConnInfo resolveConnInfo(Object conn, Class<?> connClass) {
+    /**
+     * 최초 1회 reflection으로 ConnInfo를 구성한다.
+     *
+     * <p>{@code meta}와 {@code url}은 호출측({@link #extractConnMetadata})에서
+     * 이미 확보했으므로 재호출하지 않는다.
+     */
+    public static ConnInfo resolveConnInfo(Object meta, Class<?> metaClass, String url) {
         try {
-            Method mGetMeta = GET_META_CACHE.get(connClass);
-            if (mGetMeta == null) {
-                mGetMeta = connClass.getMethod("getMetaData");
-                GET_META_CACHE.put(connClass, mGetMeta);
-            }
-            Object meta = mGetMeta.invoke(conn);
-            if (meta == null) return ConnInfo.UNKNOWN;
-
-            Class<?> metaClass = meta.getClass();
-
             Method mGetProductName = GET_PRODUCT_NAME_CACHE.get(metaClass);
             if (mGetProductName == null) {
                 mGetProductName = metaClass.getMethod("getDatabaseProductName");
@@ -218,16 +243,11 @@ public final class JdbcStatementAdvice {
 
             String dbName = null, peerName = null, peerPort = null, dbUser = null;
 
-            try {
-                Method mGetUrl = GET_URL_CACHE.get(metaClass);
-                if (mGetUrl == null) {
-                    mGetUrl = metaClass.getMethod("getURL");
-                    GET_URL_CACHE.put(metaClass, mGetUrl);
-                }
-                String url = (String) mGetUrl.invoke(meta);
-                String[] parsed = parseJdbcUrl(url);   // [dbName, peerName, peerPort]
+            // url은 extractConnMetadata에서 이미 가져왔으므로 재호출 불필요
+            if (url != null) {
+                String[] parsed = parseJdbcUrl(url);
                 if (parsed != null) { dbName = parsed[0]; peerName = parsed[1]; peerPort = parsed[2]; }
-            } catch (Throwable ignored) {}
+            }
 
             try {
                 Method mGetUser = GET_USERNAME_CACHE.get(metaClass);
