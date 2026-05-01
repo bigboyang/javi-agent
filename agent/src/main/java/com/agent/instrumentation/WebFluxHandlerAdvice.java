@@ -90,11 +90,12 @@ public final class WebFluxHandlerAdvice {
 
         if (handler != null) {
             try {
-                Method getBeanType = handler.getClass().getMethod("getBeanType");
-                Class<?> beanType = (Class<?>) getBeanType.invoke(handler);
+                Class<?> beanType = (Class<?>) handler.getClass().getMethod("getBeanType").invoke(handler);
                 Method handlerMethod = (Method) handler.getClass().getMethod("getMethod").invoke(handler);
-                span.setAttribute("http.route",
-                        beanType.getSimpleName() + "#" + handlerMethod.getName());
+                String route = extractHttpRoute(beanType, handlerMethod);
+                if (route != null) {
+                    span.setAttribute("http.route", route);
+                }
             } catch (Throwable ignored) {}
         }
 
@@ -245,6 +246,61 @@ public final class WebFluxHandlerAdvice {
         else MDC.put("traceId", state.prevTraceId);
         if (state.prevSpanId == null) MDC.remove("spanId");
         else MDC.put("spanId", state.prevSpanId);
+    }
+
+    // --- http.route 추출 ---
+
+    private static final String[] MAPPING_ANNOTATION_NAMES = {
+        "org.springframework.web.bind.annotation.RequestMapping",
+        "org.springframework.web.bind.annotation.GetMapping",
+        "org.springframework.web.bind.annotation.PostMapping",
+        "org.springframework.web.bind.annotation.PutMapping",
+        "org.springframework.web.bind.annotation.DeleteMapping",
+        "org.springframework.web.bind.annotation.PatchMapping"
+    };
+
+    private static String extractHttpRoute(Class<?> beanType, Method method) {
+        try {
+            String classPath = extractMappingPath(beanType.getAnnotations());
+            String methodPath = extractMappingPath(method.getAnnotations());
+            if (classPath == null && methodPath == null) return null;
+            return combinePaths(classPath, methodPath);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String extractMappingPath(java.lang.annotation.Annotation[] annotations) {
+        for (java.lang.annotation.Annotation annotation : annotations) {
+            String typeName = annotation.annotationType().getName();
+            for (String candidate : MAPPING_ANNOTATION_NAMES) {
+                if (candidate.equals(typeName)) {
+                    String[] paths = null;
+                    try {
+                        paths = (String[]) annotation.annotationType()
+                                .getMethod("path").invoke(annotation);
+                    } catch (Throwable ignored) {}
+                    if (paths == null || paths.length == 0) {
+                        try {
+                            paths = (String[]) annotation.annotationType()
+                                    .getMethod("value").invoke(annotation);
+                        } catch (Throwable ignored) {}
+                    }
+                    return (paths != null && paths.length > 0) ? paths[0] : "";
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String combinePaths(String classPath, String methodPath) {
+        String base = classPath != null ? classPath : "";
+        String sub  = methodPath != null ? methodPath : "";
+        if (!base.isEmpty() && !base.startsWith("/")) base = "/" + base;
+        if (base.endsWith("/"))                       base = base.substring(0, base.length() - 1);
+        if (!sub.isEmpty() && !sub.startsWith("/"))   sub  = "/" + sub;
+        String combined = base + sub;
+        return combined.isEmpty() ? "/" : combined;
     }
 
     // --- reflection 헬퍼 ---
