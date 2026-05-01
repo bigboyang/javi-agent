@@ -55,7 +55,8 @@ public final class AgentRuntime {
         Sampler sampler;
         AdaptiveSampler adaptiveSampler = null;
         if (config.getTargetSps() > 0) {
-            adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate());
+            adaptiveSampler = new AdaptiveSampler(config.getTargetSps(), config.getSampleRate(),
+                    config.getCriticalUrls(), config.getClusterMinSamples());
             sampler = adaptiveSampler;
             AgentLogger.info("[AdaptiveSampler] Enabled (TargetSps: " + config.getTargetSps() + ")");
         } else {
