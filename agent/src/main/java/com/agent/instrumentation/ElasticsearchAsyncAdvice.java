@@ -33,10 +33,12 @@ public final class ElasticsearchAsyncAdvice {
     private static final String RESPONSE_LISTENER =
             "org.elasticsearch.client.ResponseListener";
 
-    private static volatile java.lang.reflect.Method GET_METHOD = null;
-    private static volatile java.lang.reflect.Method GET_ENDPOINT = null;
-    private static volatile java.lang.reflect.Method GET_NODES = null;
+    private static volatile java.lang.reflect.Method GET_METHOD    = null;
+    private static volatile java.lang.reflect.Method GET_ENDPOINT  = null;
+    private static volatile java.lang.reflect.Method GET_NODES     = null;
     private static volatile java.lang.reflect.Method GET_NODE_HOST = null;
+    private static volatile java.lang.reflect.Method HOST_GET_NAME = null;
+    private static volatile java.lang.reflect.Method HOST_GET_PORT = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -70,10 +72,7 @@ public final class ElasticsearchAsyncAdvice {
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (endpoint != null) span.setAttribute("url.path", endpoint);
 
-        String baseUrl = extractBaseUrl(restClient);
-        if (baseUrl != null && endpoint != null) {
-            span.setAttribute("url.full", baseUrl + endpoint);
-        }
+        setNodeAttributes(span, restClient, endpoint);
 
         Scope scope = span.makeCurrent();
 
@@ -204,8 +203,8 @@ public final class ElasticsearchAsyncAdvice {
         } catch (Throwable t) { return null; }
     }
 
-    private static String extractBaseUrl(Object restClient) {
-        if (restClient == null) return null;
+    private static void setNodeAttributes(Span span, Object restClient, String endpoint) {
+        if (restClient == null) return;
         try {
             java.lang.reflect.Method getNodes = GET_NODES;
             if (getNodes == null) {
@@ -213,16 +212,39 @@ public final class ElasticsearchAsyncAdvice {
                 GET_NODES = getNodes;
             }
             java.util.List<?> nodes = (java.util.List<?>) getNodes.invoke(restClient);
-            if (nodes == null || nodes.isEmpty()) return null;
+            if (nodes == null || nodes.isEmpty()) return;
             Object node = nodes.get(0);
-            java.lang.reflect.Method getHostMethod = GET_NODE_HOST;
-            if (getHostMethod == null) {
-                getHostMethod = node.getClass().getMethod("getHost");
-                GET_NODE_HOST = getHostMethod;
+
+            java.lang.reflect.Method getHost = GET_NODE_HOST;
+            if (getHost == null) {
+                getHost = node.getClass().getMethod("getHost");
+                GET_NODE_HOST = getHost;
             }
-            Object host = getHostMethod.invoke(node);
-            return host != null ? host.toString() : null;
-        } catch (Throwable t) { return null; }
+            Object host = getHost.invoke(node);
+            if (host == null) return;
+
+            java.lang.reflect.Method getHostName = HOST_GET_NAME;
+            if (getHostName == null) {
+                getHostName = host.getClass().getMethod("getHostName");
+                HOST_GET_NAME = getHostName;
+            }
+            java.lang.reflect.Method getPort = HOST_GET_PORT;
+            if (getPort == null) {
+                getPort = host.getClass().getMethod("getPort");
+                HOST_GET_PORT = getPort;
+            }
+
+            String hostname = (String) getHostName.invoke(host);
+            int port = (int) getPort.invoke(host);
+
+            if (hostname != null) span.setAttribute("server.address", hostname);
+            if (port > 0)         span.setAttribute("server.port", (long) port);
+            if (hostname != null && endpoint != null) {
+                span.setAttribute("url.full", host.toString() + endpoint);
+            }
+        } catch (Throwable t) {
+            AgentLogger.debug("[ES Async] setNodeAttributes failed: " + t.getMessage());
+        }
     }
 
     private static void restoreMdc(State state) {

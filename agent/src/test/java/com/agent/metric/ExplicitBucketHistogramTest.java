@@ -156,9 +156,9 @@ class ExplicitBucketHistogramTest {
         histogram.record(200L);
 
         assertEquals(3L, histogram.getCount());
-        assertEquals(260L, histogram.getSum());
-        assertEquals(10L, histogram.getMin());
-        assertEquals(200L, histogram.getMax());
+        assertEquals(260.0, histogram.getSum(), 0.0);
+        assertEquals(10.0, histogram.getMin(), 0.0);
+        assertEquals(200.0, histogram.getMax(), 0.0);
     }
 
     @Test
@@ -183,7 +183,7 @@ class ExplicitBucketHistogramTest {
         for (int i = 0; i < 100; i++) {
             histogram.record(100L); // 100ms 버킷에 100개
         }
-        long p50 = histogram.estimatePercentile(50.0);
+        double p50 = histogram.estimatePercentile(50.0);
         assertTrue(p50 > 0, "P50은 0보다 커야 함");
     }
 }

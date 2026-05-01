@@ -494,7 +494,7 @@ public final class ControllerMethodAdvice {
     private static void recordHttpMetrics(State state, Throwable error) {
         try {
             if (state.route == null) return;
-            long durationMs = (System.nanoTime() - state.startNano) / 1_000_000L;
+            double durationSeconds = (System.nanoTime() - state.startNano) / 1_000_000_000.0;
             final String method   = state.httpMethod != null ? state.httpMethod : "UNKNOWN";
             final String route    = state.route;
             final String cacheKey = method + "|" + route;
@@ -511,8 +511,10 @@ public final class ControllerMethodAdvice {
                 java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                 tags.put("http.request.method", method);
                 tags.put("http.route", route);
-                return com.agent.metric.MetricRegistry.get().histogram("http.server.request.duration", tags);
-            }).record(durationMs);
+                return com.agent.metric.MetricRegistry.get().histogram(
+                        "http.server.request.duration", "", "s", tags,
+                        com.agent.metric.ExplicitBucketHistogram.OTEL_HTTP_BOUNDARIES_SECONDS);
+            }).record(durationSeconds);
 
             if (error != null) {
                 HTTP_ERR_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {

@@ -42,9 +42,12 @@ import java.lang.reflect.Method;
  */
 public final class ElasticsearchAdvice {
 
-    private static volatile Method GET_METHOD = null;
-    private static volatile Method GET_ENDPOINT = null;
-    private static volatile Method GET_NODES = null;
+    private static volatile Method GET_METHOD    = null;
+    private static volatile Method GET_ENDPOINT  = null;
+    private static volatile Method GET_NODES     = null;
+    private static volatile Method GET_NODE_HOST = null;
+    private static volatile Method HOST_GET_NAME = null;
+    private static volatile Method HOST_GET_PORT = null;
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(@Advice.This Object restClient, @Advice.Argument(0) Object request) {
@@ -79,11 +82,8 @@ public final class ElasticsearchAdvice {
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (endpoint != null)   span.setAttribute("url.path", endpoint);
 
-        // url.full: extract first node host from RestClient.getNodes()
-        String baseUrl = extractBaseUrl(restClient);
-        if (baseUrl != null && endpoint != null) {
-            span.setAttribute("url.full", baseUrl + endpoint);
-        }
+        // server.address, server.port, url.full — OTel CLIENT span 필수 속성
+        setNodeAttributes(span, restClient, endpoint);
 
         Scope scope = span.makeCurrent();
 
@@ -162,11 +162,11 @@ public final class ElasticsearchAdvice {
     }
 
     /**
-     * RestClient.getNodes() → first Node.getHost().toString() → "http://host:port"
-     * ES 6.x+ RestClient has getNodes() returning List<Node>; Node.getHost() returns HttpHost.
+     * RestClient.getNodes() → first Node → HttpHost → server.address/server.port/url.full.
+     * ES 6.4+ 기준. OTel DB semantic conventions: server.address(required), server.port(conditional).
      */
-    private static String extractBaseUrl(Object restClient) {
-        if (restClient == null) return null;
+    private static void setNodeAttributes(Span span, Object restClient, String endpoint) {
+        if (restClient == null) return;
         try {
             Method getNodes = GET_NODES;
             if (getNodes == null) {
@@ -174,13 +174,38 @@ public final class ElasticsearchAdvice {
                 GET_NODES = getNodes;
             }
             java.util.List<?> nodes = (java.util.List<?>) getNodes.invoke(restClient);
-            if (nodes == null || nodes.isEmpty()) return null;
+            if (nodes == null || nodes.isEmpty()) return;
             Object node = nodes.get(0);
-            Object host = node.getClass().getMethod("getHost").invoke(node);
-            if (host == null) return null;
-            return host.toString(); // HttpHost.toString() → "http://hostname:port"
+
+            Method getHost = GET_NODE_HOST;
+            if (getHost == null) {
+                getHost = node.getClass().getMethod("getHost");
+                GET_NODE_HOST = getHost;
+            }
+            Object host = getHost.invoke(node);
+            if (host == null) return;
+
+            Method getHostName = HOST_GET_NAME;
+            if (getHostName == null) {
+                getHostName = host.getClass().getMethod("getHostName");
+                HOST_GET_NAME = getHostName;
+            }
+            Method getPort = HOST_GET_PORT;
+            if (getPort == null) {
+                getPort = host.getClass().getMethod("getPort");
+                HOST_GET_PORT = getPort;
+            }
+
+            String hostname = (String) getHostName.invoke(host);
+            int port = (int) getPort.invoke(host);
+
+            if (hostname != null) span.setAttribute("server.address", hostname);
+            if (port > 0)         span.setAttribute("server.port", (long) port);
+            if (hostname != null && endpoint != null) {
+                span.setAttribute("url.full", host.toString() + endpoint);
+            }
         } catch (Throwable t) {
-            return null;
+            AgentLogger.debug("[Elasticsearch] setNodeAttributes failed: " + t.getMessage());
         }
     }
 

@@ -92,6 +92,16 @@ public final class MetricRegistry {
         });
     }
 
+    public ExplicitBucketHistogram histogram(String name, String description, String unit,
+                                             Map<String, String> attributes, double[] boundaries) {
+        MetricKey key = new MetricKey(name, attributes);
+        return bucketHistograms.computeIfAbsent(key, k -> {
+            ExplicitBucketHistogram h = new ExplicitBucketHistogram(name, description, unit, k.getAttributes(), boundaries);
+            bucketsByName.computeIfAbsent(name, n -> new CopyOnWriteArrayList<>()).add(h);
+            return h;
+        });
+    }
+
     /**
      * 현재 등록된 모든 메트릭의 스냅샷을 찍어 SdkMeterProvider로 전송한다.
      * 주기적으로 호출된다 (예: JvmMetricsCollector 수집 시).
@@ -162,7 +172,7 @@ public final class MetricRegistry {
                 if (first == null) first = hist;
                 // getDoubleBoundaries(): 생성자에서 1회 변환된 캐시 — 루프마다 double[] 재할당 없음
                 List<Exemplar> exemplars = hist.collectAndResetExemplars();
-                long[] minMax = hist.collectAndResetMinMax(); // DELTA 구간 min/max 원자적 리셋
+                double[] minMax = hist.collectAndResetMinMax(); // DELTA 구간 min/max 원자적 리셋
                 hpts.add(new MetricData.HistogramPoint(
                         hist.getAttributes(), now,
                         count, hist.getSum(), minMax[0], minMax[1],

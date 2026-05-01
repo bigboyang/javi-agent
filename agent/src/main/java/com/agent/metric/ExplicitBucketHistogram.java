@@ -30,28 +30,28 @@ import java.util.concurrent.atomic.LongAdder;
  *   <li>고지연/에러 스팬 우선 수용 — overflow 버킷 포함</li>
  *   <li>활성 sampled span 없으면 Exemplar 기록 생략 (hot path 최소화)</li>
  * </ul>
- *
- * <p>기본 버킷 경계: OTel/Prometheus 표준 HTTP 레이턴시 버킷 (ms 단위)
  */
 public final class ExplicitBucketHistogram {
 
-    /** OTel HTTP 레이턴시 기본 버킷 경계 (ms) — Prometheus client_java와 동일 */
+    /** ms 단위 기본 버킷 경계 (Prometheus client_java 동일) */
     public static final long[] DEFAULT_BOUNDARIES =
             {1, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 10000};
+
+    /** OTel Semantic Conventions v1.21+ HTTP server duration 버킷 경계 (seconds) */
+    public static final double[] OTEL_HTTP_BOUNDARIES_SECONDS =
+            {0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0};
 
     private final String name;
     private final String description;
     private final String unit;
     private final Map<String, String> attributes;
-    private final long[]   boundaries;
-    /** boundaries의 double[] 변환 캐시 — scrapeAndEmit 루프마다 재할당 제거 */
-    private final double[] doubleBoundaries;
+    private final double[] doubleBoundaries;     // native-unit boundaries; record() 및 export 모두 이 값 사용
     private final LongAdder[] bucketCounts;
     private final LongAdder overflowCount;
     private final LongAdder totalCount;
-    private final LongAdder totalSum;
-    private final AtomicLong minValue;
-    private final AtomicLong maxValue;
+    private final AtomicLong totalSumBits;        // Double.doubleToRawLongBits(sum) — CAS 기반 double 누적
+    private final AtomicLong minValueBits;        // Double.doubleToRawLongBits(min)
+    private final AtomicLong maxValueBits;        // Double.doubleToRawLongBits(max)
 
     /**
      * 버킷별 Exemplar 슬롯 (length = boundaries.length + 1, 마지막이 overflow 슬롯).
@@ -61,39 +61,41 @@ public final class ExplicitBucketHistogram {
 
     /**
      * 버킷별 관측 횟수 — Reservoir Sampling(Algorithm R)의 교체 확률 계산에 사용.
-     * bucketCounts와 별도로 관리해야 정확한 1/N 확률 보장.
      */
     private final AtomicLong[] exemplarObsCount;
 
     public ExplicitBucketHistogram(String name, Map<String, String> attributes) {
-        this(name, "", "ms", attributes, DEFAULT_BOUNDARIES);
+        this(name, "", "ms", attributes, toDoubleArray(DEFAULT_BOUNDARIES));
     }
 
     public ExplicitBucketHistogram(String name, String description, String unit, Map<String, String> attributes) {
-        this(name, description, unit, attributes, DEFAULT_BOUNDARIES);
+        this(name, description, unit, attributes, toDoubleArray(DEFAULT_BOUNDARIES));
     }
 
+    /** ms 단위 long[] 경계를 double[]로 변환하여 생성. */
+    public ExplicitBucketHistogram(String name, String description, String unit,
+                                   Map<String, String> attributes, long[] boundaries) {
+        this(name, description, unit, attributes, toDoubleArray(boundaries));
+    }
+
+    /** double[] 경계 직접 지정 생성자 (초 단위 OTel 표준 버킷 등에 사용). */
     @SuppressWarnings("unchecked")
-    public ExplicitBucketHistogram(String name, String description, String unit, Map<String, String> attributes, long[] boundaries) {
-        this.name       = name;
-        this.description = description != null ? description : "";
-        this.unit       = unit != null ? unit : "1";
-        this.attributes = attributes != null ? attributes : Collections.emptyMap();
-        this.boundaries = boundaries;
-        this.doubleBoundaries = new double[boundaries.length];
-        for (int i = 0; i < boundaries.length; i++) this.doubleBoundaries[i] = boundaries[i];
-        this.bucketCounts = new LongAdder[boundaries.length];
-        for (int i = 0; i < boundaries.length; i++) {
-            bucketCounts[i] = new LongAdder();
-        }
+    public ExplicitBucketHistogram(String name, String description, String unit,
+                                   Map<String, String> attributes, double[] doubleBoundaries) {
+        this.name             = name;
+        this.description      = description != null ? description : "";
+        this.unit             = unit != null ? unit : "1";
+        this.attributes       = attributes != null ? attributes : Collections.emptyMap();
+        this.doubleBoundaries = doubleBoundaries;
+        this.bucketCounts     = new LongAdder[doubleBoundaries.length];
+        for (int i = 0; i < doubleBoundaries.length; i++) bucketCounts[i] = new LongAdder();
         this.overflowCount = new LongAdder();
         this.totalCount    = new LongAdder();
-        this.totalSum      = new LongAdder();
-        this.minValue      = new AtomicLong(Long.MAX_VALUE);
-        this.maxValue      = new AtomicLong(Long.MIN_VALUE);
+        this.totalSumBits  = new AtomicLong(Double.doubleToRawLongBits(0.0));
+        this.minValueBits  = new AtomicLong(Double.doubleToRawLongBits(Double.MAX_VALUE));
+        this.maxValueBits  = new AtomicLong(Double.doubleToRawLongBits(-Double.MAX_VALUE));
 
-        // Exemplar 슬롯 초기화 (buckets + 1 overflow)
-        int slots = boundaries.length + 1;
+        int slots = doubleBoundaries.length + 1;
         this.exemplarSlots    = new AtomicReference[slots];
         this.exemplarObsCount = new AtomicLong[slots];
         for (int i = 0; i < slots; i++) {
@@ -102,9 +104,25 @@ public final class ExplicitBucketHistogram {
         }
     }
 
+    private static double[] toDoubleArray(long[] longs) {
+        double[] d = new double[longs.length];
+        for (int i = 0; i < longs.length; i++) d[i] = longs[i];
+        return d;
+    }
+
     /**
-     * 값을 밀리초 단위로 기록한다.
-     * 이진 탐색으로 버킷을 결정하고 해당 LongAdder만 원자적으로 증가시킨다.
+     * long 값을 기록한다 (ms 단위 히스토그램에서 사용).
+     * 내부적으로 double로 변환 후 {@link #record(double)}에 위임한다.
+     */
+    public void record(long value) {
+        record((double) value);
+    }
+
+    /**
+     * double 값을 기록한다.
+     * ms 단위 히스토그램은 long 캐스트 값을, 초 단위 히스토그램은 seconds 값을 전달한다.
+     *
+     * <p>이진 탐색으로 버킷을 결정하고 해당 LongAdder만 원자적으로 증가시킨다.
      *
      * <p>Exemplar 샘플링 오버헤드:
      * <ul>
@@ -112,10 +130,10 @@ public final class ExplicitBucketHistogram {
      *   <li>활성 span 있음: ThreadLocalRandom + AtomicLong CAS + AtomicReference CAS</li>
      * </ul>
      */
-    public void record(long valueMs) {
-        if (valueMs < 0) return;
-        int idx = Arrays.binarySearch(boundaries, valueMs);
-        if (idx < 0) idx = -idx - 1;  // 삽입 위치 = 해당 버킷 인덱스
+    public void record(double value) {
+        if (value < 0) return;
+        int idx = Arrays.binarySearch(doubleBoundaries, value);
+        if (idx < 0) idx = -(idx + 1);  // 삽입 위치 = 해당 버킷 인덱스
 
         int exemplarIdx;
         if (idx < bucketCounts.length) {
@@ -123,15 +141,22 @@ public final class ExplicitBucketHistogram {
             exemplarIdx = idx;
         } else {
             overflowCount.increment();
-            exemplarIdx = boundaries.length; // overflow slot
+            exemplarIdx = doubleBoundaries.length;
         }
         totalCount.increment();
-        totalSum.add(valueMs);
-        updateMin(valueMs);
-        updateMax(valueMs);
+        addDoubleSum(value);
+        updateMin(value);
+        updateMax(value);
 
-        // Exemplar 샘플링 (hot path 최소화: span 없으면 즉시 리턴)
-        tryRecordExemplar(valueMs, exemplarIdx);
+        tryRecordExemplar(value, exemplarIdx);
+    }
+
+    private void addDoubleSum(double v) {
+        long curr, next;
+        do {
+            curr = totalSumBits.get();
+            next = Double.doubleToRawLongBits(Double.longBitsToDouble(curr) + v);
+        } while (!totalSumBits.compareAndSet(curr, next));
     }
 
     /**
@@ -144,7 +169,7 @@ public final class ExplicitBucketHistogram {
      *   <li>본 구현: Algorithm R (1/N 확률 교체) + 에러/느린 스팬 우선 수용</li>
      * </ul>
      */
-    private void tryRecordExemplar(long valueMs, int slotIdx) {
+    private void tryRecordExemplar(double value, int slotIdx) {
         // isRecording() 체크 생략: PropagatedSpan은 기본값 false를 반환하지만
         // 유효한 컨텍스트를 가지므로, isValid() + isSampled()로만 판별한다.
         SpanContext ctx = Context.currentSpan().getContext();
@@ -157,7 +182,7 @@ public final class ExplicitBucketHistogram {
 
         long timeUnixNano = System.currentTimeMillis() * 1_000_000L;
         byte traceFlags = ctx.getTraceFlags().asByte();
-        Exemplar exemplar = new Exemplar(valueMs, timeUnixNano, ctx.getTraceId(), ctx.getSpanId(), traceFlags, null);
+        Exemplar exemplar = new Exemplar(value, timeUnixNano, ctx.getTraceId(), ctx.getSpanId(), traceFlags, null);
         exemplarSlots[slotIdx].set(exemplar);
     }
 
@@ -167,7 +192,7 @@ public final class ExplicitBucketHistogram {
      *
      * @param percentile 0–100 (예: 95.0 → P95)
      */
-    public long estimatePercentile(double percentile) {
+    public double estimatePercentile(double percentile) {
         long total = totalCount.sum();
         if (total == 0) return 0;
         long target = (long) Math.ceil(total * percentile / 100.0);
@@ -176,14 +201,14 @@ public final class ExplicitBucketHistogram {
             long bc = bucketCounts[i].sum();
             cumulative += bc;
             if (cumulative >= target) {
-                long lowerBound   = (i == 0) ? 0 : boundaries[i - 1];
-                long upperBound   = boundaries[i];
+                double lowerBound = (i == 0) ? 0 : doubleBoundaries[i - 1];
+                double upperBound = doubleBoundaries[i];
                 long prevCumul    = cumulative - bc;
                 if (bc == 0) return upperBound;
                 return lowerBound + (upperBound - lowerBound) * (target - prevCumul) / bc;
             }
         }
-        return boundaries[boundaries.length - 1];
+        return doubleBoundaries[doubleBoundaries.length - 1];
     }
 
     /**
@@ -225,38 +250,48 @@ public final class ExplicitBucketHistogram {
 
     /**
      * DELTA export용 min/max 스냅샷 — 원자적으로 읽고 리셋한다.
-     * 반환: long[]{min, max}. 관측값이 없으면 {0, 0}.
+     * 반환: double[]{min, max}. 관측값이 없으면 {0.0, 0.0}.
      */
-    public long[] collectAndResetMinMax() {
-        long min = minValue.getAndSet(Long.MAX_VALUE);
-        long max = maxValue.getAndSet(Long.MIN_VALUE);
-        return new long[]{min == Long.MAX_VALUE ? 0 : min, max == Long.MIN_VALUE ? 0 : max};
+    public double[] collectAndResetMinMax() {
+        long minBits = minValueBits.getAndSet(Double.doubleToRawLongBits(Double.MAX_VALUE));
+        long maxBits = maxValueBits.getAndSet(Double.doubleToRawLongBits(-Double.MAX_VALUE));
+        double min = Double.longBitsToDouble(minBits);
+        double max = Double.longBitsToDouble(maxBits);
+        return new double[]{min == Double.MAX_VALUE ? 0.0 : min, max == -Double.MAX_VALUE ? 0.0 : max};
     }
 
-    public long[]              getBoundaries()       { return boundaries; }
+    public double[]            getBoundaries()       { return doubleBoundaries; }
     public double[]            getDoubleBoundaries() { return doubleBoundaries; }
-    public long                getCount()      { return totalCount.sum(); }
-    public long                getSum()        { return totalSum.sum(); }
-    public long                getMin()        { long v = minValue.get(); return v == Long.MAX_VALUE ? 0 : v; }
-    public long                getMax()        { long v = maxValue.get(); return v == Long.MIN_VALUE ? 0 : v; }
-    public String              getName()       { return name; }
-    public String              getDescription(){ return description; }
-    public String              getUnit()       { return unit; }
-    public Map<String, String> getAttributes() { return attributes; }
+    public long                getCount()            { return totalCount.sum(); }
+    public double              getSum()              { return Double.longBitsToDouble(totalSumBits.get()); }
+    public double              getMin()              {
+        double v = Double.longBitsToDouble(minValueBits.get());
+        return v == Double.MAX_VALUE ? 0.0 : v;
+    }
+    public double              getMax()              {
+        double v = Double.longBitsToDouble(maxValueBits.get());
+        return v == -Double.MAX_VALUE ? 0.0 : v;
+    }
+    public String              getName()             { return name; }
+    public String              getDescription()      { return description; }
+    public String              getUnit()             { return unit; }
+    public Map<String, String> getAttributes()       { return attributes; }
 
-    private void updateMin(long value) {
-        long current;
+    private void updateMin(double v) {
+        long curr, next;
         do {
-            current = minValue.get();
-            if (value >= current) return;
-        } while (!minValue.compareAndSet(current, value));
+            curr = minValueBits.get();
+            if (v >= Double.longBitsToDouble(curr)) return;
+            next = Double.doubleToRawLongBits(v);
+        } while (!minValueBits.compareAndSet(curr, next));
     }
 
-    private void updateMax(long value) {
-        long current;
+    private void updateMax(double v) {
+        long curr, next;
         do {
-            current = maxValue.get();
-            if (value <= current) return;
-        } while (!maxValue.compareAndSet(current, value));
+            curr = maxValueBits.get();
+            if (v <= Double.longBitsToDouble(curr)) return;
+            next = Double.doubleToRawLongBits(v);
+        } while (!maxValueBits.compareAndSet(curr, next));
     }
 }
