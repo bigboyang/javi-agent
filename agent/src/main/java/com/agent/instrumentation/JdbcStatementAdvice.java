@@ -63,11 +63,10 @@ public final class JdbcStatementAdvice {
         }
     }
 
-    // ── 메트릭 직접 레퍼런스 캐시 ("dbSystem|dbOperation" → Counter/Histogram) ─
+    // ── 메트릭 직접 레퍼런스 캐시 ("dbSystem|dbOperation[|errorType]" → Histogram) ─
     // 매 쿼리마다 HashMap + MetricKey + TreeMap 생성을 제거한다.
-    public static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_COUNT_CACHE     = new ConcurrentHashMap<>(16);
-    public static final ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram> DB_DUR_CACHE       = new ConcurrentHashMap<>(16);
-    public static final ConcurrentHashMap<String, com.agent.metric.Counter>                 DB_ERR_COUNT_CACHE = new ConcurrentHashMap<>(16);
+    public static final ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram> DB_DUR_CACHE     = new ConcurrentHashMap<>(16);
+    public static final ConcurrentHashMap<String, com.agent.metric.ExplicitBucketHistogram> DB_ERR_DUR_CACHE = new ConcurrentHashMap<>(16);
 
     @Advice.OnMethodEnter(suppress = Throwable.class)
     public static State onEnter(
@@ -130,30 +129,30 @@ public final class JdbcStatementAdvice {
      */
     public static void recordDbMetrics(String dbSystem, String dbOperation, long startNano, Throwable error) {
         try {
-            long durationMs = (System.nanoTime() - startNano) / 1_000_000L;
+            double durationSeconds = (System.nanoTime() - startNano) / 1_000_000_000.0;
             final String cacheKey = dbSystem + "|" + dbOperation;
 
-            DB_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
-                java.util.Map<String, String> tags = new java.util.HashMap<>(4);
-                tags.put("db.system", dbSystem);
-                tags.put("db.operation.name", dbOperation);
-                return com.agent.metric.MetricRegistry.get().counter("db.client.operation.count", tags);
-            }).increment();
-
-            DB_DUR_CACHE.computeIfAbsent(cacheKey, k -> {
-                java.util.Map<String, String> tags = new java.util.HashMap<>(4);
-                tags.put("db.system", dbSystem);
-                tags.put("db.operation.name", dbOperation);
-                return com.agent.metric.MetricRegistry.get().histogram("db.client.operation.duration", tags);
-            }).record(durationMs);
-
             if (error != null) {
-                DB_ERR_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
+                String errorType = error.getClass().getName();
+                final String errCacheKey = cacheKey + "|" + errorType;
+                DB_ERR_DUR_CACHE.computeIfAbsent(errCacheKey, k -> {
+                    java.util.Map<String, String> tags = new java.util.HashMap<>(6);
+                    tags.put("db.system", dbSystem);
+                    tags.put("db.operation.name", dbOperation);
+                    tags.put("error.type", errorType);
+                    return com.agent.metric.MetricRegistry.get().histogram(
+                            "db.client.request.duration", "DB client request duration", "s", tags,
+                            com.agent.metric.ExplicitBucketHistogram.OTEL_DB_BOUNDARIES_SECONDS);
+                }).record(durationSeconds);
+            } else {
+                DB_DUR_CACHE.computeIfAbsent(cacheKey, k -> {
                     java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                     tags.put("db.system", dbSystem);
                     tags.put("db.operation.name", dbOperation);
-                    return com.agent.metric.MetricRegistry.get().counter("db.client.operation.error.count", tags);
-                }).increment();
+                    return com.agent.metric.MetricRegistry.get().histogram(
+                            "db.client.request.duration", "DB client request duration", "s", tags,
+                            com.agent.metric.ExplicitBucketHistogram.OTEL_DB_BOUNDARIES_SECONDS);
+                }).record(durationSeconds);
             }
         } catch (Throwable ignored) {}
     }
