@@ -103,6 +103,10 @@ public final class OtlpHttpProtobufSender {
         return new OtlpHttpProtobufSender(resolveEndpoint(), resolveTimeoutMs(), "traces");
     }
 
+    public static OtlpHttpProtobufSender create(String signalType) {
+        return new OtlpHttpProtobufSender(resolveEndpoint(), resolveTimeoutMs(), signalType);
+    }
+
     public static OtlpHttpProtobufSender create(String baseEndpoint, long timeoutMs) {
         return new OtlpHttpProtobufSender(baseEndpoint, timeoutMs, "traces");
     }

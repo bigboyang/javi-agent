@@ -164,7 +164,7 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private final AtomicLong failedBatches    = new AtomicLong(0);
 
     public OtlpHttpMetricExporter() {
-        this(resolveServiceName(), OtlpHttpProtobufSender.create());
+        this(resolveServiceName(), OtlpHttpProtobufSender.create("metrics"));
     }
 
     public OtlpHttpMetricExporter(String serviceName, OtlpHttpProtobufSender sender) {

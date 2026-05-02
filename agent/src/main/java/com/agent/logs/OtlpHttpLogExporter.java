@@ -56,7 +56,7 @@ public final class OtlpHttpLogExporter implements DataExporter<LogRecord> {
     private final AtomicLong failedBatches  = new AtomicLong(0);
 
     public OtlpHttpLogExporter() {
-        this(resolveServiceName(), OtlpHttpProtobufSender.create());
+        this(resolveServiceName(), OtlpHttpProtobufSender.create("logs"));
     }
 
     public OtlpHttpLogExporter(String serviceName, OtlpHttpProtobufSender sender) {
