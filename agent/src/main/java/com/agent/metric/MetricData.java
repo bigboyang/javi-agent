@@ -76,6 +76,7 @@ public final class MetricData {
         private final Map<String, String> attributes;
         private final Map<String, Object> typedAttributes;
         private final Instant timestamp;
+        private final List<Exemplar> exemplars;
 
         /** 기본 생성자 — String 속성 (하위 호환). */
         public Point(double value, Map<String, String> attributes, Instant timestamp) {
@@ -83,6 +84,7 @@ public final class MetricData {
             this.attributes       = attributes;
             this.typedAttributes  = null;
             this.timestamp        = timestamp;
+            this.exemplars        = Collections.emptyList();
         }
 
         private Point(double value, Instant timestamp, Map<String, Object> typedAttributes) {
@@ -90,6 +92,16 @@ public final class MetricData {
             this.attributes       = null;
             this.typedAttributes  = typedAttributes;
             this.timestamp        = timestamp;
+            this.exemplars        = Collections.emptyList();
+        }
+
+        private Point(double value, Map<String, String> attributes, Map<String, Object> typedAttributes,
+                      Instant timestamp, List<Exemplar> exemplars) {
+            this.value            = value;
+            this.attributes       = attributes;
+            this.typedAttributes  = typedAttributes;
+            this.timestamp        = timestamp;
+            this.exemplars        = exemplars != null ? exemplars : Collections.emptyList();
         }
 
         /** 타입 정보를 보존하는 속성(int, double, bool, String)이 필요할 때 사용. */
@@ -97,10 +109,23 @@ public final class MetricData {
             return new Point(value, timestamp, typedAttributes);
         }
 
+        /** Exemplar를 포함하는 String 속성 포인트 생성. */
+        public static Point withExemplars(double value, Map<String, String> attributes,
+                                          Instant timestamp, List<Exemplar> exemplars) {
+            return new Point(value, attributes, null, timestamp, exemplars);
+        }
+
+        /** Exemplar를 포함하는 typed 속성 포인트 생성. */
+        public static Point withTypedAttrsAndExemplars(double value, Map<String, Object> typedAttributes,
+                                                        Instant timestamp, List<Exemplar> exemplars) {
+            return new Point(value, null, typedAttributes, timestamp, exemplars);
+        }
+
         public double              getValue()           { return value; }
         public Map<String, String> getAttributes()      { return attributes; }
         public Map<String, Object> getTypedAttributes() { return typedAttributes; }
         public Instant             getTimestamp()       { return timestamp; }
+        public List<Exemplar>      getExemplars()       { return exemplars; }
     }
 
     // ---- ExplicitBucketHistogram 데이터 포인트 ----

@@ -70,6 +70,7 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_NDP_START_TIME_NS  = 2;
     private static final int FN_NDP_TIME_NS        = 3;
     private static final int FN_NDP_AS_DOUBLE      = 4;
+    private static final int FN_NDP_EXEMPLARS      = 5;
     private static final int FN_HIST_DATA_POINTS   = 1;
     private static final int FN_HIST_TEMPORALITY   = 2;
     private static final int FN_HDP_ATTRS          = 9;
@@ -464,6 +465,12 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
                 ProtoEncoder.writeFixed64Field(out, FN_NDP_TIME_NS, nanos);
             }
             ProtoEncoder.writeDoubleField(out, FN_NDP_AS_DOUBLE, point.getValue());
+            List<Exemplar> exemplars = point.getExemplars();
+            if (exemplars != null) {
+                for (Exemplar ex : exemplars) {
+                    if (ex != null) ProtoEncoder.writeMessage(out, FN_NDP_EXEMPLARS, encodeExemplar(ex));
+                }
+            }
             return out.toByteArray();
         } finally {
             returnOut(out);
