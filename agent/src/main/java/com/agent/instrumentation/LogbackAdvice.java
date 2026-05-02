@@ -1,6 +1,6 @@
 package com.agent.instrumentation;
 
-import com.agent.logs.SdkLogEmitter;
+import com.agent.logs.AppLogCollector;
 import com.agent.span.Context;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
@@ -10,7 +10,9 @@ import net.bytebuddy.asm.Advice;
 import org.slf4j.MDC;
 
 /**
- * Logback 로그 이벤트 발생 시 MDC 주입 및 로그 메시지 수집.
+ * Logback 로그 이벤트 발생 시 로그 캡처 및 MDC 주입.
+ *
+ * <p>로그 캡처(파일 + OTLP)는 {@link AppLogCollector#handleLogEvent}에 위임한다.
  *
  * <p>MDC 주입 전략:
  * <ul>
@@ -28,13 +30,12 @@ public class LogbackAdvice {
                 ch.qos.logback.classic.spi.ILoggingEvent loggingEvent =
                         (ch.qos.logback.classic.spi.ILoggingEvent) event;
 
-                // 로그 메시지 수집
-                // Bug #9: getFormattedMessage()가 null을 반환할 수 있으므로 null-safe 처리
-                // (logger.info(null) 등 null 메시지 로그 호출 시 발생 → ClickHouse body="")
                 String message = loggingEvent.getFormattedMessage();
                 if (message == null) message = loggingEvent.getMessage();
                 if (message == null) message = "";
-                SdkLogEmitter.emit(
+
+                // 파일 기록 + OTLP 전송 (AppLogCollector가 단일 진입점)
+                AppLogCollector.handleLogEvent(
                         loggingEvent.getLoggerName(),
                         loggingEvent.getLevel().toString(),
                         message,

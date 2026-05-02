@@ -1,6 +1,6 @@
 package com.agent.instrumentation;
 
-import com.agent.logs.SdkLogEmitter;
+import com.agent.logs.AppLogCollector;
 import com.agent.span.Context;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
@@ -11,7 +11,9 @@ import org.apache.logging.log4j.ThreadContext;
 import org.apache.logging.log4j.core.LogEvent;
 
 /**
- * Log4j2 로그 이벤트 발생 시 ThreadContext 주입 및 로그 메시지 수집.
+ * Log4j2 로그 이벤트 발생 시 로그 캡처 및 ThreadContext 주입.
+ *
+ * <p>로그 캡처(파일 + OTLP)는 {@link AppLogCollector#handleLogEvent}에 위임한다.
  *
  * <p>MDC 주입 전략 (LogbackAdvice와 동일):
  * <ul>
@@ -27,12 +29,12 @@ public class Log4j2Advice {
             if (event instanceof LogEvent) {
                 LogEvent logEvent = (LogEvent) event;
 
-                // 로그 메시지 수집
-                // Bug #9: getFormattedMessage()가 null을 반환할 수 있으므로 null-safe 처리
                 String message = logEvent.getMessage().getFormattedMessage();
                 if (message == null) message = logEvent.getMessage().getFormat();
                 if (message == null) message = "";
-                SdkLogEmitter.emit(
+
+                // 파일 기록 + OTLP 전송 (AppLogCollector가 단일 진입점)
+                AppLogCollector.handleLogEvent(
                         logEvent.getLoggerName(),
                         logEvent.getLevel().toString(),
                         message,
@@ -76,7 +78,7 @@ public class Log4j2Advice {
             attrs.put("exception.type", thrown.getClass().getName());
             String msg = thrown.getMessage();
             if (msg != null && !msg.isEmpty()) attrs.put("exception.message", msg);
-            java.io.StringWriter sw = new java.io.StringWriter(512);
+            java.io.StringWriter sw = new java.io.StringWriter();
             thrown.printStackTrace(new java.io.PrintWriter(sw));
             attrs.put("exception.stacktrace", sw.toString());
         }
