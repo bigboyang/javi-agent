@@ -26,7 +26,7 @@ public final class SdkSpanBuilder implements SpanBuilder {
     private SpanKind spanKind = SpanKind.INTERNAL;
     private long startTimestampNanos;
     private final Clock clock;
-    private final Map<AttributeKey<?>, Object> startAttributes = new LinkedHashMap<>();
+    private Map<AttributeKey<?>, Object> startAttributes;
 
     public SdkSpanBuilder(
             String name,
@@ -109,6 +109,9 @@ public final class SdkSpanBuilder implements SpanBuilder {
     @Override
     public <T> SpanBuilder setAttribute(AttributeKey<T> key, T value) {
         if (key != null && value != null) {
+            if (startAttributes == null) {
+                startAttributes = new LinkedHashMap<>();
+            }
             startAttributes.put(key, value);
         }
         return this;
@@ -154,11 +157,12 @@ public final class SdkSpanBuilder implements SpanBuilder {
                 anchoredClock,
                 clock,
                 startNanoTime);
-        // apply start attributes
-        for (Map.Entry<AttributeKey<?>, Object> entry : startAttributes.entrySet()) {
-            @SuppressWarnings("unchecked")
-            AttributeKey<Object> key = (AttributeKey<Object>) entry.getKey();
-            span.setAttribute(key, entry.getValue());
+        if (startAttributes != null) {
+            for (Map.Entry<AttributeKey<?>, Object> entry : startAttributes.entrySet()) {
+                @SuppressWarnings("unchecked")
+                AttributeKey<Object> key = (AttributeKey<Object>) entry.getKey();
+                span.setAttribute(key, entry.getValue());
+            }
         }
         sharedState.getSpanProcessor().onStart(span);
         return span;
