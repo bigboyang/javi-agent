@@ -102,7 +102,7 @@ public final class GrpcServerAdvice {
         span.setAttribute("rpc.system", "grpc");
         span.setAttribute("rpc.service", serviceName);
         span.setAttribute("rpc.method", methodName);
-        if (fullMethodName != null) span.setAttribute("rpc.grpc.full_method", fullMethodName);
+        if (fullMethodName != null) span.setAttribute("com.agent.grpc.full_method", fullMethodName);
 
         Scope scope = span.makeCurrent();
 
