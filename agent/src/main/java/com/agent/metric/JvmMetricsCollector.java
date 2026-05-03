@@ -329,8 +329,6 @@ public final class JvmMetricsCollector {
     }
 
     private static Map<String, String> attr(String key, String value) {
-        Map<String, String> m = new HashMap<>(2);
-        m.put(key, value);
-        return m;
+        return Collections.singletonMap(key, value);
     }
 }

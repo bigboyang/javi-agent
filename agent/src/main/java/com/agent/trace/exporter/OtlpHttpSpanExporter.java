@@ -84,6 +84,10 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
     private static final ThreadLocal<ArrayDeque<ByteArrayOutputStream>> TL_BAOS_POOL =
             ThreadLocal.withInitial(ArrayDeque::new);
 
+    // P1-18: 단일 scope fast-path용 재사용 리스트 — 대부분 단일 scope이므로 LinkedHashMap+ArrayList 할당을 방지한다.
+    private static final ThreadLocal<ArrayList<ReadableSpan>> TL_SPAN_LIST =
+            ThreadLocal.withInitial(ArrayList::new);
+
     private final OtlpHttpProtobufSender sender;
     private final String serviceName;
     private final AtomicBoolean isShutdown = new AtomicBoolean(false);
@@ -178,51 +182,44 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
 
     private byte[] encodeExportRequestWithResource(Collection<Span> spans, byte[] resourceBytes) {
         Set<String> dropKeys = com.agent.config.RemoteConfigHolder.get().getSpanDrop();
-        Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = new LinkedHashMap<>();
+
+        // Single-scope fast path: reuse TL list, skip LinkedHashMap+ArrayList allocation.
+        // Multi-scope (rare) falls back to a fresh LinkedHashMap.
+        ArrayList<ReadableSpan> singleList = TL_SPAN_LIST.get();
+        singleList.clear();
+        InstrumentationScopeInfo singleScope = null;
+        Map<InstrumentationScopeInfo, List<ReadableSpan>> byScope = null;
+
         for (Span span : spans) {
             if (!(span instanceof ReadableSpan)) continue;
             ReadableSpan rs = (ReadableSpan) span;
             InstrumentationScopeInfo scope = rs.getInstrumentationScopeInfo();
             if (scope == null) scope = DEFAULT_SCOPE;
-            byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
+
+            if (byScope != null) {
+                byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
+            } else if (singleScope == null || singleScope.equals(scope)) {
+                singleScope = scope;
+                singleList.add(rs);
+            } else {
+                // Multiple scopes detected — promote to map
+                byScope = new LinkedHashMap<>();
+                byScope.put(singleScope, new ArrayList<>(singleList));
+                singleList.clear();
+                byScope.computeIfAbsent(scope, k -> new ArrayList<>()).add(rs);
+            }
         }
 
         ByteArrayOutputStream rsOut = acquire(128 + spans.size() * 300);
         try {
             ProtoEncoder.writeMessage(rsOut, FN_RS_RESOURCE, resourceBytes);
 
-            for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
-                InstrumentationScopeInfo scope = entry.getKey();
-                List<ReadableSpan> scopeSpanList = entry.getValue();
-
-                ByteArrayOutputStream spansOut = acquire(scopeSpanList.size() * 300);
-                try {
-                    for (ReadableSpan rs : scopeSpanList) {
-                        ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
-                    }
-
-                    ByteArrayOutputStream scopeOut = acquire(64);
-                    try {
-                        ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME,
-                                scope.getName() != null ? scope.getName() : "javi-agent");
-                        if (scope.getVersion() != null)
-                            ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
-
-                        ByteArrayOutputStream scopeSpansOut = acquire(64 + spansOut.size());
-                        try {
-                            ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
-                            byte[] spansBytes = spansOut.toByteArray();
-                            scopeSpansOut.write(spansBytes, 0, spansBytes.length);
-                            ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
-                        } finally {
-                            release(scopeSpansOut);
-                        }
-                    } finally {
-                        release(scopeOut);
-                    }
-                } finally {
-                    release(spansOut);
+            if (byScope != null) {
+                for (Map.Entry<InstrumentationScopeInfo, List<ReadableSpan>> entry : byScope.entrySet()) {
+                    encodeScopeGroup(rsOut, entry.getKey(), entry.getValue(), dropKeys);
                 }
+            } else if (singleScope != null) {
+                encodeScopeGroup(rsOut, singleScope, singleList, dropKeys);
             }
 
             ByteArrayOutputStream requestOut = acquire(rsOut.size() + 4);
@@ -233,7 +230,40 @@ public final class OtlpHttpSpanExporter implements SpanExporter {
                 release(requestOut);
             }
         } finally {
+            singleList.clear(); // span 레퍼런스를 thread 재사용 전에 해제
             release(rsOut);
+        }
+    }
+
+    private void encodeScopeGroup(ByteArrayOutputStream rsOut, InstrumentationScopeInfo scope,
+                                   List<ReadableSpan> spanList, Set<String> dropKeys) {
+        ByteArrayOutputStream spansOut = acquire(spanList.size() * 300);
+        try {
+            for (ReadableSpan rs : spanList) {
+                ProtoEncoder.writeMessage(spansOut, FN_SS_SPANS, encodeSpan(rs, dropKeys));
+            }
+
+            ByteArrayOutputStream scopeOut = acquire(64);
+            try {
+                ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME,
+                        scope.getName() != null ? scope.getName() : "javi-agent");
+                if (scope.getVersion() != null)
+                    ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, scope.getVersion());
+
+                ByteArrayOutputStream scopeSpansOut = acquire(64 + spansOut.size());
+                try {
+                    ProtoEncoder.writeMessage(scopeSpansOut, FN_SS_SCOPE, scopeOut.toByteArray());
+                    byte[] spansBytes = spansOut.toByteArray();
+                    scopeSpansOut.write(spansBytes, 0, spansBytes.length);
+                    ProtoEncoder.writeMessage(rsOut, FN_RS_SCOPE_SPANS, scopeSpansOut.toByteArray());
+                } finally {
+                    release(scopeSpansOut);
+                }
+            } finally {
+                release(scopeOut);
+            }
+        } finally {
+            release(spansOut);
         }
     }
 
