@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * db.system: JdbcStatementAdvice 공유 헬퍼를 통해 실제 DB 벤더 감지.
  * db.name, net.peer.name, net.peer.port: JDBC URL 파싱으로 추출.
- * db.user: Connection.getMetaData().getUserName().
+ * db.user: deprecated/removed in OTel 1.24+ — not emitted.
  *
  * 성능 최적화:
  *  - getDeclaredFields() 전체 스캔을 제거하고 Field를 클래스별로 캐싱

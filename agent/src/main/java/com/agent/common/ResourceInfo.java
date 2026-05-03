@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
  *   <li>host.fqdn         - InetAddress.getLocalHost().getCanonicalHostName()</li>
  *   <li>process.pid       - ProcessHandle.current().pid()</li>
  *   <li>os.type           - os.name 시스템 프로퍼티 기반</li>
- *   <li>deployment.environment - JAVI_DEPLOYMENT_ENV / javi.deployment.env</li>
+ *   <li>deployment.environment.name - JAVI_DEPLOYMENT_ENV / javi.deployment.env</li>
  *   <li>telemetry.sdk.name     - "javi-agent"</li>
  *   <li>telemetry.sdk.language - "java"</li>
  *   <li>telemetry.sdk.version  - "1.0.0"</li>
@@ -85,10 +85,10 @@ public final class ResourceInfo {
         // os.type + os.description
         detectOs(m);
 
-        // deployment.environment
+        // deployment.environment.name (OTel 1.24+)
         String env = get("JAVI_DEPLOYMENT_ENV", "javi.deployment.env", "");
         if (!env.isEmpty()) {
-            m.put("deployment.environment", env);
+            m.put("deployment.environment.name", env);
         }
 
         // Kubernetes Resource Detection

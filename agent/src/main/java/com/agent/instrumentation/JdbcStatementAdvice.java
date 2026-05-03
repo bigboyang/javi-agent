@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * db.system: Connection.getMetaData().getDatabaseProductName()으로 실제 DB 벤더 감지
  *   (MySQL/PostgreSQL/Oracle/etc.)
  * db.name, net.peer.name, net.peer.port: JDBC URL 파싱으로 추출
- * db.user: Connection.getMetaData().getUserName()
+ * db.user: deprecated/removed in OTel 1.24+ — not emitted
  *
  * 성능 최적화:
  *  - getConnection/getMetaData 등 Reflection Method 객체를 클래스별로 캐싱
@@ -217,7 +217,6 @@ public final class JdbcStatementAdvice {
             try { span.setAttribute("server.port", Long.parseLong(info.peerPort)); }
             catch (NumberFormatException ignored) {}
         }
-        if (info.dbUser   != null) span.setAttribute("db.user",         info.dbUser);
         String peerService = info.peerName != null
                 ? info.dbSystem + "@" + info.peerName
                 : info.dbSystem;

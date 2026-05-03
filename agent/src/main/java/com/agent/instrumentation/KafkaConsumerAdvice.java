@@ -29,9 +29,9 @@ import java.util.Map;
  *   감싸는 단일 진입점이므로 여기서 계측해야 올바른 parent-child 관계가 형성된다.
  *
  * 추가 속성:
- *   messaging.kafka.message.partition — 레코드가 consume된 파티션
- *   messaging.kafka.message.offset    — 레코드 오프셋
- *   messaging.message.id              — 레코드 키 (null이면 생략)
+ *   messaging.kafka.destination.partition — 레코드가 consume된 파티션
+ *   messaging.kafka.message.offset        — 레코드 오프셋
+ *   messaging.message.id                  — 레코드 키 (null이면 생략)
  */
 public final class KafkaConsumerAdvice {
 
@@ -70,9 +70,9 @@ public final class KafkaConsumerAdvice {
         Span span = builder.startSpan();
         span.setAttribute("messaging.system", "kafka");
         span.setAttribute("messaging.destination.name", topic);
-        span.setAttribute("messaging.operation", "process");
+        span.setAttribute("messaging.operation.type", "process");
         span.setAttribute("peer.service", "kafka");
-        span.setAttribute("messaging.kafka.message.partition", (long) record.partition());
+        span.setAttribute("messaging.kafka.destination.partition", (long) record.partition());
         span.setAttribute("messaging.kafka.message.offset", record.offset());
 
         Object key = record.key();

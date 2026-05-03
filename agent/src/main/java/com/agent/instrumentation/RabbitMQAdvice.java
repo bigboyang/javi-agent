@@ -46,7 +46,7 @@ public final class RabbitMQAdvice {
 
             span.setAttribute("messaging.system", "rabbitmq");
             span.setAttribute("messaging.destination.name", dest);
-            span.setAttribute("messaging.operation", "send");
+            span.setAttribute("messaging.operation.type", "send");
             if (routingKey != null && !routingKey.isEmpty()) {
                 span.setAttribute("messaging.rabbitmq.destination.routing_key", routingKey);
             }
@@ -125,7 +125,7 @@ public final class RabbitMQAdvice {
 
             span.setAttribute("messaging.system", "rabbitmq");
             span.setAttribute("messaging.destination.name", queue);
-            span.setAttribute("messaging.operation", "process");
+            span.setAttribute("messaging.operation.type", "process");
             String receivedRoutingKey = props.getReceivedRoutingKey();
             if (receivedRoutingKey != null && !receivedRoutingKey.isEmpty()) {
                 span.setAttribute("messaging.rabbitmq.destination.routing_key", receivedRoutingKey);

@@ -36,7 +36,7 @@ public final class KafkaProducerAdvice {
 
         span.setAttribute("messaging.system", "kafka");
         span.setAttribute("messaging.destination.name", topic);
-        span.setAttribute("messaging.operation", "send");
+        span.setAttribute("messaging.operation.type", "send");
         span.setAttribute("peer.service", "kafka");
 
         // partition (null = 브로커 자동 배정, 알 수 없으면 속성 생략)
