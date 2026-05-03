@@ -42,6 +42,12 @@ public final class JvmMetricsCollector {
     private static final ConcurrentHashMap<String, Long> lastGcCount   = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, Long> lastGcElapsed = new ConcurrentHashMap<>();
 
+    // Reflection 결과 캐싱 — volatile + single-check lazy-init (JedisAdvice 패턴 동일)
+    private static volatile java.lang.reflect.Method PROCESS_CPU_LOAD_METHOD;
+    private static volatile java.lang.reflect.Method SYSTEM_CPU_LOAD_METHOD;
+    private static volatile java.lang.reflect.Method FREE_PHYSICAL_MEMORY_METHOD;
+    private static volatile java.lang.reflect.Method TOTAL_PHYSICAL_MEMORY_METHOD;
+
     private JvmMetricsCollector() {}
 
     /**
@@ -227,25 +233,31 @@ public final class JvmMetricsCollector {
     private static void collectCpu() {
         try {
             java.lang.management.OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
-            java.lang.reflect.Method processCpuLoad = os.getClass().getDeclaredMethod("getProcessCpuLoad");
-            processCpuLoad.setAccessible(true);
-            double cpuLoad = (double) processCpuLoad.invoke(os);
+
+            java.lang.reflect.Method processM = PROCESS_CPU_LOAD_METHOD;
+            if (processM == null) {
+                processM = os.getClass().getDeclaredMethod("getProcessCpuLoad");
+                processM.setAccessible(true);
+                PROCESS_CPU_LOAD_METHOD = processM;
+            }
+            double cpuLoad = (double) processM.invoke(os);
             if (cpuLoad >= 0) {
                 MetricRegistry.get().gauge("process.cpu.utilization", "Process CPU utilization (0-100 percent)", "%", Collections.emptyMap())
                         .set((long) (cpuLoad * 100));
             }
 
-            // 시스템 전체 CPU (JDK 14+ getCpuLoad, 이하 getSystemCpuLoad)
-            double systemLoad = -1;
-            try {
-                java.lang.reflect.Method getCpuLoad = os.getClass().getDeclaredMethod("getCpuLoad");
-                getCpuLoad.setAccessible(true);
-                systemLoad = (double) getCpuLoad.invoke(os);
-            } catch (NoSuchMethodException e) {
-                java.lang.reflect.Method getSystemCpuLoad = os.getClass().getDeclaredMethod("getSystemCpuLoad");
-                getSystemCpuLoad.setAccessible(true);
-                systemLoad = (double) getSystemCpuLoad.invoke(os);
+            // 시스템 전체 CPU — JDK 14+ getCpuLoad, 이하 getSystemCpuLoad (첫 호출에만 탐색)
+            java.lang.reflect.Method sysM = SYSTEM_CPU_LOAD_METHOD;
+            if (sysM == null) {
+                try {
+                    sysM = os.getClass().getDeclaredMethod("getCpuLoad");
+                } catch (NoSuchMethodException e) {
+                    sysM = os.getClass().getDeclaredMethod("getSystemCpuLoad");
+                }
+                sysM.setAccessible(true);
+                SYSTEM_CPU_LOAD_METHOD = sysM;
             }
+            double systemLoad = (double) sysM.invoke(os);
             if (systemLoad >= 0) {
                 MetricRegistry.get().gauge("system.cpu.utilization", "System CPU utilization (0-100 percent)", "%", Collections.emptyMap())
                         .set((long) (systemLoad * 100));
@@ -257,13 +269,21 @@ public final class JvmMetricsCollector {
         try {
             java.lang.management.OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
 
-            java.lang.reflect.Method freeMemory = os.getClass().getDeclaredMethod("getFreePhysicalMemorySize");
-            freeMemory.setAccessible(true);
-            long free = (long) freeMemory.invoke(os);
+            java.lang.reflect.Method freeM = FREE_PHYSICAL_MEMORY_METHOD;
+            if (freeM == null) {
+                freeM = os.getClass().getDeclaredMethod("getFreePhysicalMemorySize");
+                freeM.setAccessible(true);
+                FREE_PHYSICAL_MEMORY_METHOD = freeM;
+            }
+            long free = (long) freeM.invoke(os);
 
-            java.lang.reflect.Method totalMemory = os.getClass().getDeclaredMethod("getTotalPhysicalMemorySize");
-            totalMemory.setAccessible(true);
-            long total = (long) totalMemory.invoke(os);
+            java.lang.reflect.Method totalM = TOTAL_PHYSICAL_MEMORY_METHOD;
+            if (totalM == null) {
+                totalM = os.getClass().getDeclaredMethod("getTotalPhysicalMemorySize");
+                totalM.setAccessible(true);
+                TOTAL_PHYSICAL_MEMORY_METHOD = totalM;
+            }
+            long total = (long) totalM.invoke(os);
 
             MetricRegistry reg = MetricRegistry.get();
             reg.gauge("system.memory.free", "Free physical memory", "By", Collections.emptyMap()).set(free);
