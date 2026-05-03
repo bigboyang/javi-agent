@@ -184,9 +184,8 @@ final class SdkSpan implements Span, ReadableSpan {
     public <T> Span setAttribute(AttributeKey<T> key, T value) {
         if (key == null || !isRecording()) return this;
 
-        // 기존 키 업데이트: count 변화 없으므로 limit 체크 불필요, 락 없이 ConcurrentHashMap에 바로 덮어쓰기
-        if (attributes.containsKey(key)) {
-            attributes.put(key, value);
+        // 기존 키 업데이트: replace()는 키 존재 여부 확인과 값 교체를 단일 탐색으로 처리
+        if (attributes.replace(key, value) != null) {
             return this;
         }
 
