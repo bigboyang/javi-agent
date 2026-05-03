@@ -402,14 +402,65 @@ public final class ControllerMethodAdvice {
                 state.span.recordException(error);
                 state.span.setStatus(SpanStatus.ERROR, error.getMessage());
             }
-            // metric만 기록
-            recordHttpMetrics(state, error);
+            int statusCode = 0;
+            try {
+                Class<?> rch = cachedRchClass;
+                if (rch == null) {
+                    synchronized (ControllerMethodAdvice.class) {
+                        rch = cachedRchClass;
+                        if (rch == null) {
+                            rch = Class.forName(
+                                    "org.springframework.web.context.request.RequestContextHolder");
+                            cachedRchClass = rch;
+                        }
+                    }
+                }
+                Method mGetRequestAttributes = cachedGetRequestAttributes;
+                if (mGetRequestAttributes == null) {
+                    synchronized (ControllerMethodAdvice.class) {
+                        mGetRequestAttributes = cachedGetRequestAttributes;
+                        if (mGetRequestAttributes == null) {
+                            mGetRequestAttributes = rch.getMethod("getRequestAttributes");
+                            cachedGetRequestAttributes = mGetRequestAttributes;
+                        }
+                    }
+                }
+                Object attrs = mGetRequestAttributes.invoke(null);
+                if (attrs != null) {
+                    Method mGetResponse = cachedGetResponse;
+                    if (mGetResponse == null) {
+                        synchronized (ControllerMethodAdvice.class) {
+                            mGetResponse = cachedGetResponse;
+                            if (mGetResponse == null) {
+                                mGetResponse = attrs.getClass().getMethod("getResponse");
+                                cachedGetResponse = mGetResponse;
+                            }
+                        }
+                    }
+                    Object response = mGetResponse.invoke(attrs);
+                    if (response != null) {
+                        Method mGetStatus = cachedGetStatus;
+                        if (mGetStatus == null) {
+                            synchronized (ControllerMethodAdvice.class) {
+                                mGetStatus = cachedGetStatus;
+                                if (mGetStatus == null) {
+                                    mGetStatus = response.getClass().getMethod("getStatus");
+                                    cachedGetStatus = mGetStatus;
+                                }
+                            }
+                        }
+                        statusCode = (int) mGetStatus.invoke(response);
+                    }
+                }
+            } catch (Throwable ignored) {}
+            recordHttpMetrics(state, error, statusCode);
             return;
         }
         // ────────────────────────────────────────────────────────────────────
 
         // http.response.status_code: HttpServletResponse.getStatus()로 추출
         // Reuses cachedRchClass / cachedGetRequestAttributes populated by onEnter.
+        int statusCode = 0;
         try {
             Class<?> rch = cachedRchClass;
             if (rch == null) {
@@ -464,7 +515,7 @@ public final class ControllerMethodAdvice {
                         }
                     }
 
-                    int statusCode = (int) mGetStatus.invoke(response);
+                    statusCode = (int) mGetStatus.invoke(response);
                     state.span.setAttribute("http.response.status_code", (long) statusCode);
                     // 4xx/5xx — exception 없이도 에러로 표시 (error rate 계산용)
                     if (statusCode >= 400 && error == null) {
@@ -482,7 +533,7 @@ public final class ControllerMethodAdvice {
 
         // HTTP 요청 메트릭 기록 — scope.close()/span.end() 이전에 호출해야
         // Exemplar 샘플링이 Context.currentSpan()으로 traceId/spanId를 캡처할 수 있다.
-        recordHttpMetrics(state, error);
+        recordHttpMetrics(state, error, statusCode);
 
         state.scope.close();
         state.span.end();
@@ -491,7 +542,7 @@ public final class ControllerMethodAdvice {
         if (state.prevSpanId  == null) MDC.remove("spanId");  else MDC.put("spanId",  state.prevSpanId);
     }
 
-    private static void recordHttpMetrics(State state, Throwable error) {
+    private static void recordHttpMetrics(State state, Throwable error, int statusCode) {
         try {
             if (state.route == null) return;
             double durationSeconds = (System.nanoTime() - state.startNano) / 1_000_000_000.0;
@@ -516,7 +567,7 @@ public final class ControllerMethodAdvice {
                         com.agent.metric.ExplicitBucketHistogram.OTEL_HTTP_BOUNDARIES_SECONDS);
             }).record(durationSeconds);
 
-            if (error != null) {
+            if (error != null || statusCode >= 400) {
                 HTTP_ERR_COUNT_CACHE.computeIfAbsent(cacheKey, k -> {
                     java.util.Map<String, String> tags = new java.util.HashMap<>(4);
                     tags.put("http.request.method", method);
