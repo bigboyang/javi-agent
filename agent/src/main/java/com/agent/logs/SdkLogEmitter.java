@@ -2,11 +2,13 @@ package com.agent.logs;
 
 
 import com.agent.common.JaviSdk;
+import com.agent.propagation.Baggage;
 import com.agent.span.Context;
 import com.agent.span.Span;
 import com.agent.span.SpanContext;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -30,12 +32,23 @@ public final class SdkLogEmitter {
 
             Span currentSpan = Context.currentSpan();
             SpanContext ctx = currentSpan.getContext();
-            
+
             String traceId = "";
             String spanId = "";
             if (ctx != null && ctx.isValid()) {
                 traceId = ctx.getTraceId();
                 spanId = ctx.getSpanId();
+            }
+
+            Baggage baggage = Context.currentBaggage();
+            Map<String, String> mergedAttributes;
+            if (baggage.isEmpty()) {
+                mergedAttributes = attributes != null ? attributes : Collections.emptyMap();
+            } else {
+                mergedAttributes = new HashMap<>(baggage.asMap());
+                if (attributes != null) {
+                    mergedAttributes.putAll(attributes);
+                }
             }
 
             LogRecord record = new LogRecord(
@@ -45,7 +58,7 @@ public final class SdkLogEmitter {
                     traceId,
                     spanId,
                     loggerName,
-                    attributes != null ? attributes : Collections.emptyMap()
+                    mergedAttributes
             );
 
             sdk.getLoggerProvider().emit(record);
