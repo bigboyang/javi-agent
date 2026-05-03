@@ -87,6 +87,25 @@ public final class TraceContextPropagator implements TextMapPropagator {
         return INSTANCE.extract(carrier, getter);
     }
 
+    /** Extracts SpanContext directly from header strings, avoiding a carrier Map allocation. */
+    public static SpanContext extractStatic(String traceparent, String tracestate) {
+        if (traceparent == null) return SpanContext.invalid();
+        String[] parts = traceparent.split("-");
+        if (parts.length != 4) return SpanContext.invalid();
+        String traceId  = parts[1];
+        String spanId   = parts[2];
+        String flagsHex = parts[3];
+        if (!TraceId.isValid(traceId) || !SpanId.isValid(spanId) || flagsHex.length() != 2) {
+            return SpanContext.invalid();
+        }
+        TraceFlags flags = fromHexByte(flagsHex);
+        TraceState traceState = TraceState.getDefault();
+        if (tracestate != null && !tracestate.isEmpty()) {
+            traceState = TraceState.fromHeader(tracestate);
+        }
+        return SpanContext.create(traceId, spanId, SpanId.getInvalid(), flags.isSampled(), flags, traceState);
+    }
+
     private static String toHexByte(byte value) {
         int v = value & 0xFF;
         String hex = Integer.toHexString(v);

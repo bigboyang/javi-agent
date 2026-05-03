@@ -134,6 +134,9 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     // key: "metricName|attrsKey" → 이전 export 시점의 누적값
     // LRU 제한: 동적 레이블 환경에서 메모리 무한 증가를 방지한다.
     private static final int MAX_HISTOGRAM_STATES = 1_000;
+    // attrs Map instance → sorted attr string; avoids new TreeMap per export cycle.
+    private static final java.util.concurrent.ConcurrentHashMap<Map<String, String>, String> ATTR_KEY_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>(64);
     private final Map<String, HistogramState> histogramStates = Collections.synchronizedMap(
             new LinkedHashMap<String, HistogramState>(256, 0.75f, true) {
                 @Override
@@ -411,8 +414,9 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
 
     private static String buildHistogramKey(String metricName, Map<String, String> attrs) {
         if (attrs == null || attrs.isEmpty()) return metricName + "|";
-        // TreeMap으로 정렬해 동일 속성 조합이면 항상 동일 키 보장
-        return metricName + "|" + new java.util.TreeMap<>(attrs);
+        String attrPart = ATTR_KEY_CACHE.computeIfAbsent(attrs,
+                m -> new java.util.TreeMap<>(m).toString());
+        return metricName + "|" + attrPart;
     }
 
     /**

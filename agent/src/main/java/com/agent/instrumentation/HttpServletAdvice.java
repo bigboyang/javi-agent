@@ -162,13 +162,9 @@ public final class HttpServletAdvice {
                 // W3C traceparent 추출 (mGetHeader 이미 캐싱됨)
                 String traceparent = (String) mGetHeader.invoke(request, "traceparent");
                 if (traceparent != null) {
-                    java.util.Map<String, String> headers = new java.util.HashMap<>(4);
-                    headers.put("traceparent", traceparent);
                     String tracestate = (String) mGetHeader.invoke(request, "tracestate");
-                    if (tracestate != null) headers.put("tracestate", tracestate);
                     com.agent.span.SpanContext extracted =
-                            com.agent.propagation.TraceContextPropagator.extractStatic(
-                                    headers, new com.agent.propagation.MapTextMapGetter());
+                            com.agent.propagation.TraceContextPropagator.extractStatic(traceparent, tracestate);
                     if (extracted.isValid()) remoteParent = extracted;
                 }
             } catch (Throwable ignored) {}
