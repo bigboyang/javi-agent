@@ -92,6 +92,7 @@ public final class MongoDbAdvice {
         span.setAttribute("db.system", "mongodb");
         span.setAttribute("db.operation.name", dbOperation);
         span.setAttribute("db.collection.name", collectionName);
+        span.setAttribute("peer.service", "mongodb");
 
         // db.namespace 추출 시도 (CommandMessage.getNamespace().getDatabaseName())
         try {

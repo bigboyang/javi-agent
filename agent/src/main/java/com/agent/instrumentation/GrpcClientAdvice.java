@@ -82,6 +82,7 @@ public final class GrpcClientAdvice {
         span.setAttribute("rpc.system", "grpc");
         span.setAttribute("rpc.service", serviceName);
         span.setAttribute("rpc.method", methodName);
+        span.setAttribute("peer.service", serviceName);
         if (fullMethodName != null) {
             span.setAttribute("rpc.grpc.full_method", fullMethodName);
         }

@@ -69,6 +69,7 @@ public final class ElasticsearchAsyncAdvice {
                 .startSpan();
 
         span.setAttribute("db.system", "elasticsearch");
+        span.setAttribute("peer.service", "elasticsearch");
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (endpoint != null) span.setAttribute("url.path", endpoint);
 
@@ -239,6 +240,7 @@ public final class ElasticsearchAsyncAdvice {
 
             if (hostname != null) span.setAttribute("server.address", hostname);
             if (port > 0)         span.setAttribute("server.port", (long) port);
+            if (hostname != null) span.setAttribute("peer.service", "elasticsearch@" + hostname);
             if (hostname != null && endpoint != null) {
                 span.setAttribute("url.full", host.toString() + endpoint);
             }

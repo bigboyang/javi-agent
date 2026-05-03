@@ -87,6 +87,18 @@ public final class WebClientAdvice {
         if (uriPath != null) span.setAttribute("url.path", uriPath);
         if (uriStr != null) span.setAttribute("url.full", uriStr);
         span.setAttribute("http.framework", "spring-webclient");
+        if (uriStr != null) {
+            try {
+                java.net.URI parsedUri = new java.net.URI(uriStr);
+                String host = parsedUri.getHost();
+                if (host != null) {
+                    span.setAttribute("server.address", host);
+                    span.setAttribute("peer.service", host);
+                    int port = parsedUri.getPort();
+                    if (port > 0) span.setAttribute("server.port", (long) port);
+                }
+            } catch (Throwable ignored) {}
+        }
 
         Scope scope = span.makeCurrent();
 

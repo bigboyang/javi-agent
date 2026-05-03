@@ -41,6 +41,14 @@ public final class ApacheHttpClientAdvice {
 
         span.setAttribute("http.request.method", method);
         span.setAttribute("url.full", UrlSanitizer.sanitize(host + uri));
+        if (target != null) {
+            String hostname = target.getHostName();
+            if (hostname != null) {
+                span.setAttribute("server.address", hostname);
+                span.setAttribute("peer.service", hostname);
+            }
+            if (target.getPort() > 0) span.setAttribute("server.port", (long) target.getPort());
+        }
 
         // 컨텍스트 전파 (Injection: TraceContext & Baggage)
         try {

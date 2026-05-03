@@ -75,6 +75,7 @@ public final class AsyncMongoDbAdvice {
         span.setAttribute("db.operation.name", dbOperation);
         span.setAttribute("db.collection.name", collectionName);
         span.setAttribute("db.transport", "async");
+        span.setAttribute("peer.service", "mongodb");
 
         try {
             java.lang.reflect.Method getNsMethod = GET_NAMESPACE_METHOD;
