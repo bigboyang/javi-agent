@@ -222,28 +222,48 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
 
     private byte[] buildExportBytes(Collection<MetricData> metrics) {
         byte[] resourceBytes = getResourceBytes();
-        ByteArrayOutputStream metricsOut = new ByteArrayOutputStream(metrics.size() * 200);
-        for (MetricData metric : metrics) {
-            if (metric == null) continue;
-            ProtoEncoder.writeMessage(metricsOut, FN_SM_METRICS, encodeMetric(metric));
+        ByteArrayOutputStream metricsOut = borrowOut();
+        try {
+            for (MetricData metric : metrics) {
+                if (metric == null) continue;
+                ProtoEncoder.writeMessage(metricsOut, FN_SM_METRICS, encodeMetric(metric));
+            }
+
+            ByteArrayOutputStream scopeOut = borrowOut();
+            try {
+                ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, "javi-metric");
+                ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, "1.0.0");
+
+                ByteArrayOutputStream scopeMetricsOut = borrowOut();
+                try {
+                    ProtoEncoder.writeMessage(scopeMetricsOut, FN_SM_SCOPE, scopeOut.toByteArray());
+                    byte[] mBytes = metricsOut.toByteArray();
+                    scopeMetricsOut.write(mBytes, 0, mBytes.length);
+
+                    ByteArrayOutputStream rmOut = borrowOut();
+                    try {
+                        ProtoEncoder.writeMessage(rmOut, FN_RM_RESOURCE, resourceBytes);
+                        ProtoEncoder.writeMessage(rmOut, FN_RM_SCOPE_METRICS, scopeMetricsOut.toByteArray());
+
+                        ByteArrayOutputStream requestOut = borrowOut();
+                        try {
+                            ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_METRICS, rmOut.toByteArray());
+                            return requestOut.toByteArray();
+                        } finally {
+                            returnOut(requestOut);
+                        }
+                    } finally {
+                        returnOut(rmOut);
+                    }
+                } finally {
+                    returnOut(scopeMetricsOut);
+                }
+            } finally {
+                returnOut(scopeOut);
+            }
+        } finally {
+            returnOut(metricsOut);
         }
-
-        ByteArrayOutputStream scopeOut = new ByteArrayOutputStream(32);
-        ProtoEncoder.writeString(scopeOut, FN_SCOPE_NAME, "javi-metric");
-        ProtoEncoder.writeString(scopeOut, FN_SCOPE_VERSION, "1.0.0");
-
-        ByteArrayOutputStream scopeMetricsOut = new ByteArrayOutputStream(64 + metricsOut.size());
-        ProtoEncoder.writeMessage(scopeMetricsOut, FN_SM_SCOPE, scopeOut.toByteArray());
-        byte[] mBytes = metricsOut.toByteArray();
-        scopeMetricsOut.write(mBytes, 0, mBytes.length);
-
-        ByteArrayOutputStream rmOut = new ByteArrayOutputStream(128 + scopeMetricsOut.size());
-        ProtoEncoder.writeMessage(rmOut, FN_RM_RESOURCE, resourceBytes);
-        ProtoEncoder.writeMessage(rmOut, FN_RM_SCOPE_METRICS, scopeMetricsOut.toByteArray());
-
-        ByteArrayOutputStream requestOut = new ByteArrayOutputStream(rmOut.size() + 4);
-        ProtoEncoder.writeMessage(requestOut, FN_RESOURCE_METRICS, rmOut.toByteArray());
-        return requestOut.toByteArray();
     }
 
     /** 하위 호환용 정적 메서드 (DELTA 상태 추적 없음, CUMULATIVE 히스토그램 인코딩). */
