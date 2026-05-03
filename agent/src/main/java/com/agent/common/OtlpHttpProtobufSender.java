@@ -53,8 +53,18 @@ public final class OtlpHttpProtobufSender {
     private volatile long                  cbOpenedAtMs = 0L;
     private static final int  CB_FAILURE_THRESHOLD = 5;
     private static final long CB_COOLDOWN_MS       = 30_000L;
+    private static final int  CB_QUEUE_CAPACITY    = 16;
 
     public enum SendResult { SUCCESS, FAILURE, SHUTDOWN }
+
+    private static final class PendingPayload {
+        final String path;
+        final byte[] protoBody;
+        final CompletableFuture<SendResult> future;
+        PendingPayload(String p, byte[] b, CompletableFuture<SendResult> f) {
+            path = p; protoBody = b; future = f;
+        }
+    }
 
     private final String baseEndpoint;
     private final long   timeoutMs;
@@ -65,6 +75,8 @@ public final class OtlpHttpProtobufSender {
     private final Map<String, String> extraHeaders;
     private final boolean gzipEnabled;
     private final ScheduledExecutorService retryScheduler;
+    private final ArrayBlockingQueue<PendingPayload> cbPendingQueue = new ArrayBlockingQueue<>(CB_QUEUE_CAPACITY);
+    private final AtomicBoolean drainScheduled = new AtomicBoolean(false);
 
     private OtlpHttpProtobufSender(String baseEndpoint, long timeoutMs, String signalType) {
         this.baseEndpoint  = baseEndpoint.replaceAll("/+$", "");
@@ -139,7 +151,17 @@ public final class OtlpHttpProtobufSender {
         CbState state = cbState.get();
         if (state == CbState.OPEN) {
             long elapsed = System.currentTimeMillis() - cbOpenedAtMs;
-            if (elapsed < CB_COOLDOWN_MS) return CompletableFuture.completedFuture(SendResult.FAILURE);
+            if (elapsed < CB_COOLDOWN_MS) {
+                // CB 쿨다운 중 즉시 드롭 대신 버퍼링 — 쿨다운 만료 후 drain에서 재시도
+                CompletableFuture<SendResult> pending = new CompletableFuture<>();
+                if (!isShutdown.get() && cbPendingQueue.offer(new PendingPayload(path, protoBody, pending))) {
+                    scheduleCbDrain(CB_COOLDOWN_MS - elapsed);
+                    recordCounter("javi.otlp.cb.buffered", 1);
+                    return pending;
+                }
+                recordCounter("javi.otlp.cb.dropped", 1);
+                return CompletableFuture.completedFuture(SendResult.FAILURE);
+            }
             // CAS 실패 시 다른 스레드가 이미 HALF_OPEN 전환 — 프로브는 하나만 허용
             if (!cbState.compareAndSet(CbState.OPEN, CbState.HALF_OPEN)) {
                 return CompletableFuture.completedFuture(SendResult.FAILURE);
@@ -247,6 +269,42 @@ public final class OtlpHttpProtobufSender {
         recordCounter("javi.otlp.send.retry", 1);
     }
 
+    private void scheduleCbDrain(long delayMs) {
+        if (drainScheduled.compareAndSet(false, true)) {
+            retryScheduler.schedule(this::drainCbPendingQueue, delayMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void drainCbPendingQueue() {
+        drainScheduled.set(false);
+        if (isShutdown.get()) {
+            PendingPayload p;
+            while ((p = cbPendingQueue.poll()) != null) p.future.complete(SendResult.FAILURE);
+            return;
+        }
+        cbState.compareAndSet(CbState.OPEN, CbState.HALF_OPEN);
+        PendingPayload first = cbPendingQueue.poll();
+        if (first == null) return;
+        submitDirect(first);
+        first.future.whenComplete((result, ex) -> {
+            if (result == SendResult.SUCCESS) {
+                PendingPayload p;
+                while ((p = cbPendingQueue.poll()) != null) submitDirect(p);
+            } else {
+                // probe 실패 → CB 재열림, 남은 버퍼 즉시 드롭
+                PendingPayload p;
+                while ((p = cbPendingQueue.poll()) != null) p.future.complete(SendResult.FAILURE);
+            }
+        });
+    }
+
+    private void submitDirect(PendingPayload payload) {
+        byte[] compressed = gzipEnabled ? tryGzip(payload.protoBody) : null;
+        byte[] body = compressed != null ? compressed : payload.protoBody;
+        boolean isGzipped = compressed != null;
+        doAttempt(payload.path, body, isGzipped, 0, payload.future);
+    }
+
     private void recordCbMetric(CbState state) {
         try {
             int val = state == CbState.CLOSED ? 0 : state == CbState.HALF_OPEN ? 1 : 2;
@@ -264,6 +322,8 @@ public final class OtlpHttpProtobufSender {
 
     public void shutdown() {
         isShutdown.set(true);
+        PendingPayload p;
+        while ((p = cbPendingQueue.poll()) != null) p.future.complete(SendResult.SHUTDOWN);
         retryScheduler.shutdownNow();
         httpExecutor.shutdownNow();
         try {
