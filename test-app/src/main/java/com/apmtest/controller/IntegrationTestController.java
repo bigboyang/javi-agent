@@ -15,24 +15,26 @@ import java.util.Map;
 @RequestMapping("/test")
 public class IntegrationTestController {
 
-    @Autowired
+    @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
 
-    @Autowired
+    @Autowired(required = false)
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    @Autowired
+    @Autowired(required = false)
     private RabbitTemplate rabbitTemplate;
 
     // 1. Redis Test (Lettuce)
     @GetMapping("/redis/set")
     public String redisSet(@RequestParam String key, @RequestParam String value) {
+        if (redisTemplate == null) return "Redis unavailable (e2e mode)";
         redisTemplate.opsForValue().set(key, value);
         return "Redis Set: " + key + "=" + value;
     }
 
     @GetMapping("/redis/get")
     public String redisGet(@RequestParam String key) {
+        if (redisTemplate == null) return "Redis unavailable (e2e mode)";
         String val = redisTemplate.opsForValue().get(key);
         return "Redis Get: " + key + "=" + val;
     }
@@ -40,6 +42,7 @@ public class IntegrationTestController {
     // 2. Kafka Test (Producer & Consumer)
     @GetMapping("/kafka/send")
     public String kafkaSend(@RequestParam String topic, @RequestParam String message) {
+        if (kafkaTemplate == null) return "Kafka unavailable (e2e mode)";
         kafkaTemplate.send(topic, message);
         return "Kafka Sent: " + message + " to topic " + topic;
     }
@@ -53,6 +56,7 @@ public class IntegrationTestController {
     // 3. RabbitMQ Test (Producer & Consumer)
     @GetMapping("/rabbitmq/send")
     public String rabbitSend(@RequestParam String queue, @RequestParam String message) {
+        if (rabbitTemplate == null) return "RabbitMQ unavailable (e2e mode)";
         rabbitTemplate.convertAndSend(queue, message);
         return "RabbitMQ Sent: " + message + " to queue " + queue;
     }
@@ -64,18 +68,23 @@ public class IntegrationTestController {
     }
 
     // 4. 복합 테스트 (Chain Test)
-    // Redis에 저장하고 -> Kafka로 메시지 쏘고 -> 다시 DB 조회하는 등의 복잡한 흐름을 시뮬레이션
     @GetMapping("/chain")
     public Map<String, Object> complexChain() {
         Map<String, Object> result = new HashMap<>();
-        
-        // Redis
-        redisTemplate.opsForValue().set("last_call", String.valueOf(System.currentTimeMillis()));
-        result.put("redis", "ok");
 
-        // Kafka
-        kafkaTemplate.send("test-topic", "Chain message from integration test");
-        result.put("kafka", "sent");
+        if (redisTemplate != null) {
+            redisTemplate.opsForValue().set("last_call", String.valueOf(System.currentTimeMillis()));
+            result.put("redis", "ok");
+        } else {
+            result.put("redis", "unavailable");
+        }
+
+        if (kafkaTemplate != null) {
+            kafkaTemplate.send("test-topic", "Chain message from integration test");
+            result.put("kafka", "sent");
+        } else {
+            result.put("kafka", "unavailable");
+        }
 
         return result;
     }

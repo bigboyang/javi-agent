@@ -29,6 +29,12 @@
               <goal>shade</goal>
             </goals>
             <configuration>
+              <relocations>
+                <relocation>
+                  <pattern>net.bytebuddy</pattern>
+                  <shadedPattern>com.agent.shaded.bytebuddy</shadedPattern>
+                </relocation>
+              </relocations>
               <transformers>
                 <transformer>
                   <manifestEntries>

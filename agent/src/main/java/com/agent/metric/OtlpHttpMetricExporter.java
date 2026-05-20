@@ -51,10 +51,10 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_EHP_ATTRS        = 1;
     private static final int FN_EHP_START_TIME   = 2;
     private static final int FN_EHP_TIME         = 3;
-    private static final int FN_EHP_COUNT        = 4;   // uint64
+    private static final int FN_EHP_COUNT        = 4;   // fixed64 (wire type 1)
     private static final int FN_EHP_SUM          = 5;   // double (optional — omit when absent)
     private static final int FN_EHP_SCALE        = 6;   // sint32 (zigzag; 0도 유효)
-    private static final int FN_EHP_ZERO_COUNT   = 7;   // uint64
+    private static final int FN_EHP_ZERO_COUNT   = 7;   // fixed64 (wire type 1)
     private static final int FN_EHP_POSITIVE     = 8;   // Buckets message
     private static final int FN_EHP_NEGATIVE     = 9;   // Buckets message
     private static final int FN_EHP_EXEMPLARS    = 11;
@@ -76,9 +76,9 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     private static final int FN_HDP_ATTRS          = 9;
     private static final int FN_HDP_START_TIME_NS  = 2;
     private static final int FN_HDP_TIME_NS        = 3;
-    private static final int FN_HDP_COUNT          = 4;  // uint64 → varint
+    private static final int FN_HDP_COUNT          = 4;  // fixed64 (wire type 1, 8 bytes)
     private static final int FN_HDP_SUM            = 5;
-    private static final int FN_HDP_BUCKET_COUNTS  = 6;  // repeated uint64 → packed varint
+    private static final int FN_HDP_BUCKET_COUNTS  = 6;  // repeated fixed64 → packed fixed64
     private static final int FN_HDP_EXPLICIT_BOUNDS= 7;
     private static final int FN_HDP_EXEMPLARS      = 8;
     private static final int FN_HDP_MIN            = 11;
@@ -420,10 +420,10 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
     }
 
     /**
-     * 버그 수정된 HistogramDataPoint 인코딩:
-     * - count: uint64 → varint (wire type 0), NOT fixed64 (wire type 1)
-     * - bucket_counts: repeated uint64 → packed varint, NOT packed fixed64
-     * - exemplars: 이제 실제로 인코딩함
+     * HistogramDataPoint 인코딩:
+     * - count: fixed64 (wire type 1, 8 bytes) — OTel proto spec 확인
+     * - bucket_counts: repeated fixed64 → packed fixed64 (8 bytes each)
+     * - exemplars: 실제로 인코딩함
      */
     private static byte[] encodeHistogramDataPointFull(
             MetricData.HistogramPoint hp,
@@ -435,10 +435,10 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
             if (startTimeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_HDP_START_TIME_NS, startTimeNs);
             if (timeNs > 0)      ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, timeNs);
 
-            ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, count);
+            ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, count);
             ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, sum);
 
-            ProtoEncoder.writePackedUint64(out, FN_HDP_BUCKET_COUNTS, bucketCounts);
+            ProtoEncoder.writePackedFixed64(out, FN_HDP_BUCKET_COUNTS, bucketCounts);
             ProtoEncoder.writePackedDouble(out, FN_HDP_EXPLICIT_BOUNDS, hp.getBoundaries());
 
             List<Exemplar> exemplars = hp.getExemplars();
@@ -510,7 +510,7 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
                 long nanos = point.getTimestamp().getEpochSecond() * 1_000_000_000L + point.getTimestamp().getNano();
                 ProtoEncoder.writeFixed64Field(out, FN_HDP_TIME_NS, nanos);
             }
-            ProtoEncoder.writeUint64Field(out, FN_HDP_COUNT, 1L);
+            ProtoEncoder.writeFixed64Field(out, FN_HDP_COUNT, 1L);
             ProtoEncoder.writeDoubleField(out, FN_HDP_SUM, point.getValue());
             return out.toByteArray();
         } finally {
@@ -619,14 +619,14 @@ public final class OtlpHttpMetricExporter implements DataExporter<MetricData> {
                     : 0L;
             if (timeNs > 0) ProtoEncoder.writeFixed64Field(out, FN_EHP_TIME, timeNs);
 
-            ProtoEncoder.writeUint64Field(out, FN_EHP_COUNT, p.getCount());
+            ProtoEncoder.writeFixed64Field(out, FN_EHP_COUNT, p.getCount());
             // sum은 optional — 수집 안 된 경우(NaN 등) 기록하지 않는다
             double sum = p.getSum();
             if (Double.isFinite(sum) && sum != 0.0)
                 ProtoEncoder.writeDoubleField(out, FN_EHP_SUM, sum);
 
             ProtoEncoder.writeSint32Field(out, FN_EHP_SCALE, p.getScale());
-            ProtoEncoder.writeUint64Field(out, FN_EHP_ZERO_COUNT, p.getZeroCount());
+            ProtoEncoder.writeFixed64Field(out, FN_EHP_ZERO_COUNT, p.getZeroCount());
 
             if (p.getPositiveBucketCounts() != null && p.getPositiveBucketCounts().length > 0)
                 ProtoEncoder.writeMessage(out, FN_EHP_POSITIVE,

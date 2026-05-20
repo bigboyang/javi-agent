@@ -102,7 +102,14 @@ public final class OtlpHttpProtobufSender {
                 2, 2, 0L, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(1000),
                 httpDaemon,
-                new ThreadPoolExecutor.DiscardOldestPolicy());
+                (runnable, executor) -> {
+                    // DiscardOldestPolicy와 동일하게 동작하되 드롭 시 메트릭 기록
+                    if (!executor.isShutdown()) {
+                        executor.getQueue().poll();
+                        recordCounter("javi.otlp.executor.rejected", 1);
+                        executor.execute(runnable);
+                    }
+                });
 
         this.httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_2)

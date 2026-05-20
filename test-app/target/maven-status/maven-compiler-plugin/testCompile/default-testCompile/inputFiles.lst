@@ -1,2 +1,4 @@
+/Users/kkc/APM/test-app/src/test/java/com/apmtest/E2EAgentTest.java
 /Users/kkc/APM/test-app/src/test/java/com/apmtest/AgentInstrumentationTest.java
+/Users/kkc/APM/test-app/src/test/java/com/apmtest/config/MockExternalServicesConfig.java
 /Users/kkc/APM/test-app/src/test/java/com/apmtest/controller/UserControllerTest.java

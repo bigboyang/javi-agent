@@ -59,6 +59,30 @@ public final class CompositeSpanExporter implements SpanExporter {
         return CompletableResultCode.ofAll(results);
     }
 
+    // exportAsync를 올바르게 오버라이드: 각 exporter의 exportAsync 결과를 합산해
+    // BatchSpanProcessor가 isSuccess()를 완료된 future에서 확인할 수 있도록 한다.
+    // 기본 구현(default)은 export()를 동기로 호출한 후 completedFuture로 감싸기 때문에
+    // export()가 반환하는 미완성 CompletableResultCode를 즉시 isSuccess() 검사해 항상 false를 반환하는 버그가 있다.
+    @Override
+    public CompletableFuture<CompletableResultCode> exportAsync(Collection<Span> spans) {
+        List<CompletableFuture<CompletableResultCode>> futures = new ArrayList<>(exporters.size());
+        for (SpanExporter exporter : exporters) {
+            if (exporter == null) {
+                futures.add(CompletableFuture.completedFuture(CompletableResultCode.ofFailure()));
+                continue;
+            }
+            futures.add(exporter.exportAsync(spans));
+        }
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApply(v -> {
+                    for (CompletableFuture<CompletableResultCode> f : futures) {
+                        CompletableResultCode r = f.getNow(null);
+                        if (r == null || !r.isSuccess()) return CompletableResultCode.ofFailure();
+                    }
+                    return CompletableResultCode.ofSuccess();
+                });
+    }
+
     @Override
     public CompletableResultCode flush() {
         List<CompletableResultCode> results = new ArrayList<>(exporters.size());

@@ -74,7 +74,11 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <!-- 에이전트 JAR를 JVM에 붙여 계측을 활성화한다 -->
-                    <!-- <argLine>-javaagent:${project.basedir}/../agent/target/javi-1.0.0.jar</argLine> -->
+                    <argLine>
+                        -javaagent:${project.basedir}/../agent/target/javi-1.0.0.jar
+                        -Dnet.bytebuddy.experimental=true
+                        -Dcom.agent.shaded.bytebuddy.experimental=true
+                    </argLine>
                 </configuration>
             </plugin>
         </plugins>

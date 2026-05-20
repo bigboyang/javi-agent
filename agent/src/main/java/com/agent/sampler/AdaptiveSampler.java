@@ -84,11 +84,12 @@ public final class AdaptiveSampler implements Sampler {
             return parentContext.isSampled() ? SamplingDecision.RECORD_AND_SAMPLE : SamplingDecision.DROP;
         }
 
-        // criticalUrls에 해당하는 스팬은 항상 샘플링
+        // criticalUrls에 해당하는 스팬은 항상 샘플링 (rate counter 미포함 — counter 오염 방지)
         if (spanName != null && isCritical(spanName)) {
             return SamplingDecision.RECORD_AND_SAMPLE;
         }
 
+        // probabilistic path에서만 카운트 — critical URL 트래픽이 rate를 오염시키지 않도록
         spanCount.incrementAndGet();
 
         if (traceId == null || traceId.length() < 16) {
