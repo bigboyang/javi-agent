@@ -1,14 +1,6 @@
 #!/bin/bash
 
-# 1) Docker 인프라 실행
-echo ">>> 인프라(Redis, Kafka, RabbitMQ, Jaeger, Prometheus)를 실행합니다..."
-docker-compose up -d
-
-# 서비스가 준비될 때까지 잠시 대기 (특히 Kafka)
-echo ">>> 서비스가 준비될 때까지 대기 중 (15초)..."
-sleep 15
-
-# 2) agent 빌드
+# 1) agent 빌드
 echo ">>> 에이전트 빌드 중..."
 cd /Users/kkc/APM/agent
 mvn clean package -DskipTests

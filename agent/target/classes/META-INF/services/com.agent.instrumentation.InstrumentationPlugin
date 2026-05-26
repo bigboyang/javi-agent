@@ -1,6 +1,7 @@
 com.agent.instrumentation.plugin.ServletInstrumentationPlugin
 com.agent.instrumentation.plugin.SpringMvcInstrumentationPlugin
 com.agent.instrumentation.plugin.JdbcStatementInstrumentationPlugin
+com.agent.instrumentation.plugin.JdbcPreparedStatementSetterPlugin
 com.agent.instrumentation.plugin.JdbcPreparedStatementInstrumentationPlugin
 com.agent.instrumentation.plugin.RestTemplateInstrumentationPlugin
 com.agent.instrumentation.plugin.HttpRequestPropagationPlugin

@@ -5,4 +5,5 @@ com/agent/span/AttributeKeyTest.class
 com/agent/trace/processor/BatchSpanProcessorTest.class
 com/agent/common/ResourceInfoTest.class
 com/agent/sampler/SamplerTest.class
+com/agent/metric/OtlpMetricEncoderTest.class
 com/agent/metric/ExplicitBucketHistogramTest.class

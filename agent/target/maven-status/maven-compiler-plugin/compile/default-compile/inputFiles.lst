@@ -65,6 +65,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/NoopTracerProvider.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/LogSampler.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/ExecutorCallableAdvice.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/plugin/JdbcPreparedStatementSetterPlugin.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/SdkSpanBuilder.java
 /Users/kkc/APM/agent/src/main/java/com/agent/trace/TraceId.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/SdkLoggerProvider.java
@@ -158,6 +159,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/Log4j2Advice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/plugin/KafkaInstrumentationPlugin.java
 /Users/kkc/APM/agent/src/main/java/com/agent/span/NoopSpanBuilder.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcPreparedStatementSetterAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/Counter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/ScheduledTaskAdvice.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/plugin/CompletableFutureInstrumentationPlugin.java
@@ -169,6 +171,7 @@
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/plugin/JdbcPreparedStatementInstrumentationPlugin.java
 /Users/kkc/APM/agent/src/main/java/com/agent/logs/OtlpHttpLogExporter.java
 /Users/kkc/APM/agent/src/main/java/com/agent/sampler/Sampler.java
+/Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/JdbcParameterCapture.java
 /Users/kkc/APM/agent/src/main/java/com/agent/instrumentation/plugin/MongoDbInstrumentationPlugin.java
 /Users/kkc/APM/agent/src/main/java/com/agent/metric/TomcatMetricsCollector.java
 /Users/kkc/APM/agent/src/main/java/com/agent/config/RemoteConfigPoller.java

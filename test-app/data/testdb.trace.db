@@ -913,3 +913,321 @@ SELEKT * FORM users WHERE id = 1 [42001-224]
 2026-03-20 12:38:54.498277+09:00 jdbc[3]: exception
 org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
 SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:12.361713+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:52:21.306315+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:26.628714+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:52:30.879330+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:35.320705+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:36.359753+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:42.928944+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:52:49.173082+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:52:49.702973+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:53:11.216577+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:53:21.884542+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:53:23.876398+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:53:28.120490+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:53:47.222426+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:53:47.737846+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:53:54.552936+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:01.314534+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:01.853320+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:54:03.483749+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:28.302719+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:35.398418+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:35.918635+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:38.658865+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:54:55.876080+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:55:14.129052+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:55:43.670919+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:55:44.186964+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:56:24.208324+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:56:28.458929+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:56:35.261563+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:56:40.140165+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:56:48.490529+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:56:58.293899+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:56:59.354766+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:57:01.473379+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:57:02.737919+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:57:13.624341+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:57:24.343230+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:57:25.403804+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:57:28.348192+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:57:31.037443+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:57:40.006201+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:57:57.091240+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:58:03.495616+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:58:04.531105+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:58:27.141550+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:58:27.660351+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:58:48.790441+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:58:51.378433+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:58:53.595638+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:59:02.204324+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:59:07.468423+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:59:11.802486+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:59:28.332252+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:59:28.849536+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:59:42.360878+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 14:59:52.709791+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 14:59:58.605804+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:00:09.075449+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:00:13.256913+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:00:17.403972+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:00:34.064634+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:00:51.415671+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:01:03.122106+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:01:24.768049+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:01:36.039880+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:01:37.076733+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:00.807206+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:02.359856+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:02.874743+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:02:05.009514+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:02:19.073089+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:29.455513+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:35.511519+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:36.030118+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:39.746742+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:02:43.009377+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:02:47.340455+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:02:49.411664+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:03:05.845991+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:03:25.243415+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:03:32.367003+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:03:34.949550+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:03:45.275039+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:03:59.990619+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:04:08.953445+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:04:28.596090+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:04:38.756687+09:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:05:48.084684+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:05:50.942762+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:05:52.506891+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:01.404869+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:06:10.919179+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:06:26.065638+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:30.389633+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:31.633424+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:06:38.852173+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:39.372082+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:43.285155+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:06:45.559606+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:06:59.568624+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:07:06.458406+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:07:07.494691+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:07:11.944819+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]
+2026-05-22 15:07:57.656692+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Syntax error in SQL statement "[*]SELEKT * FORM users WHERE id = 1"; expected "SAVEPOINT, SCRIPT, SHUTDOWN"; SQL statement:
+SELEKT * FORM users WHERE id = 1 [42001-224]
+2026-05-22 15:08:11.851031+09:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NON_EXISTENT_TABLE" not found; SQL statement:
+SELECT * FROM non_existent_table [42102-224]

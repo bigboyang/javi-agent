@@ -53,11 +53,20 @@ public final class JdbcPreparedStatementAdvice {
         String sql = extractSql(preparedStatement);
 
         String maskedSql = SqlSanitizer.sanitize(sql);
+        // Strip H2 type-cast hints (e.g. " {?: CAST(? AS BIGINT)}") that remain after sanitize
+        int h2HintIdx = maskedSql.indexOf(" {?");
+        if (h2HintIdx > 0) maskedSql = maskedSql.substring(0, h2HintIdx);
         String spanName = maskedSql.length() > 60
                 ? maskedSql.substring(0, 60) + "..." : maskedSql;
 
         Span span = tracer.spanBuilder(spanName).setSpanKind(SpanKind.CLIENT).startSpan();
         span.setAttribute("db.query.text", maskedSql);
+
+        // 바인딩 파라미터 캡처 — JdbcPreparedStatementSetterAdvice가 setXxx() 호출 시 저장
+        String params = JdbcParameterCapture.getAndClear(preparedStatement);
+        if (params != null) {
+            span.setAttribute("db.query.parameters", params);
+        }
 
         // DB 메타데이터 추출 — JdbcStatementAdvice의 캐시 공유
         String dbSystem = "other_sql";
@@ -128,16 +137,36 @@ public final class JdbcPreparedStatementAdvice {
             SQL_FIELD_CACHE.put(psClass, sqlField);
         }
 
+        String sql = null;
         if (sqlField != ABSENT_SENTINEL) {
             try {
                 Object val = sqlField.get(preparedStatement);
-                if (val instanceof String) return (String) val;
+                if (val instanceof String) sql = (String) val;
             } catch (Throwable ignored) {}
         }
 
-        // toString() fallback
-        String str = preparedStatement.toString();
-        return (str != null) ? str : "PreparedStatement";
+        if (sql == null) {
+            // toString() fallback — strip H2 internal format "prepN: <SQL>"
+            String str = preparedStatement.toString();
+            if (str != null) {
+                int colonIdx = str.indexOf(": ");
+                if (colonIdx > 0) {
+                    String prefix = str.substring(0, colonIdx);
+                    if (prefix.startsWith("prep") && prefix.substring(4).matches("\\d+")) {
+                        str = str.substring(colonIdx + 2);
+                    }
+                }
+                sql = str;
+            }
+        }
+
+        // Strip H2 type-cast hints: " {?: CAST(? AS BIGINT)}" or " {?: ?}"
+        if (sql != null) {
+            int hintIdx = sql.indexOf(" {?");
+            if (hintIdx > 0) sql = sql.substring(0, hintIdx);
+        }
+
+        return (sql != null && !sql.isEmpty()) ? sql : "PreparedStatement";
     }
 
     public static final class State {

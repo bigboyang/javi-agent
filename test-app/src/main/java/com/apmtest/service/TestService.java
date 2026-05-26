@@ -5,10 +5,17 @@ import com.apmtest.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * APM 테스트용 시나리오 서비스.
@@ -135,5 +142,140 @@ public class TestService {
         result.put("requestedDelayMs", ms);
         result.put("actualElapsedMs", elapsed);
         return result;
+    }
+
+    // ────────────────────────────────────────────
+    // 추가 Java 예외 케이스
+    // ────────────────────────────────────────────
+
+    /** ClassCastException */
+    public void triggerClassCast() {
+        Object obj = Integer.valueOf(42);
+        String s = (String) obj;
+    }
+
+    /** ArrayIndexOutOfBoundsException */
+    public void triggerArrayOob() {
+        int[] arr = new int[3];
+        int x = arr[99];
+    }
+
+    /** NumberFormatException */
+    public void triggerNumberFormat() {
+        Integer.parseInt("not-a-number");
+    }
+
+    /** IllegalArgumentException */
+    public void triggerIllegalArgument() {
+        throw new IllegalArgumentException("음수 값은 허용되지 않습니다: value=-1");
+    }
+
+    /** IllegalStateException */
+    public void triggerIllegalState() {
+        throw new IllegalStateException("초기화되지 않은 리소스에 접근했습니다");
+    }
+
+    /** UnsupportedOperationException */
+    public void triggerUnsupportedOp() {
+        List<String> fixed = List.of("a", "b", "c");
+        fixed.add("d"); // unmodifiable list
+    }
+
+    /** ConcurrentModificationException */
+    public void triggerConcurrentModification() {
+        List<String> list = new ArrayList<>(List.of("a", "b", "c"));
+        for (String item : list) {
+            if ("b".equals(item)) {
+                list.remove(item);
+            }
+        }
+    }
+
+    // ────────────────────────────────────────────
+    // DB 트랜잭션 에러 케이스
+    // ────────────────────────────────────────────
+
+    /** NOT NULL 제약 위반 */
+    public void triggerNotNullViolation() {
+        jdbcTemplate.execute(
+            "INSERT INTO users (name, email, phone, created_at, updated_at) " +
+            "VALUES (NULL, 'notnull-test@test.com', '010-0000-9999', NOW(), NOW())"
+        );
+    }
+
+    /** 트랜잭션 롤백 - 부분 insert 후 의도적 롤백 */
+    @Transactional
+    public void triggerTransactionRollback() {
+        jdbcTemplate.execute(
+            "INSERT INTO users (name, email, phone, created_at, updated_at) " +
+            "VALUES ('롤백유저', 'rollback-test@test.com', '010-0000-8888', NOW(), NOW())"
+        );
+        throw new RuntimeException("의도적 트랜잭션 롤백 - 이 데이터는 저장되지 않아야 합니다");
+    }
+
+    // ────────────────────────────────────────────
+    // 외부 HTTP 호출 에러 케이스
+    // ────────────────────────────────────────────
+
+    /** 외부 HTTP 연결 타임아웃 */
+    public void triggerExternalTimeout() throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL("http://10.255.255.1:9999/timeout").openConnection();
+        conn.setConnectTimeout(2000);
+        conn.setReadTimeout(2000);
+        conn.connect();
+    }
+
+    /** 외부 HTTP 연결 거부 (Connection Refused) */
+    public void triggerExternalRefused() throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL("http://localhost:19999/refused").openConnection();
+        conn.setConnectTimeout(1000);
+        conn.connect();
+    }
+
+    // ────────────────────────────────────────────
+    // 메모리/리소스 케이스
+    // ────────────────────────────────────────────
+
+    /** 메모리 스파이크 후 해제 (GC 압박 유발) */
+    public Map<String, Object> triggerMemorySpike(int mb) {
+        int clampedMb = Math.min(mb, 256);
+        List<byte[]> sink = new ArrayList<>();
+        long start = System.currentTimeMillis();
+        for (int i = 0; i < clampedMb; i++) {
+            sink.add(new byte[1024 * 1024]);
+        }
+        long allocMs = System.currentTimeMillis() - start;
+        sink.clear();
+        System.gc();
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("allocatedMb", clampedMb);
+        result.put("allocMs", allocMs);
+        result.put("status", "allocated and released");
+        return result;
+    }
+
+    // ────────────────────────────────────────────
+    // 카오스 케이스 (랜덤 에러 혼합)
+    // ────────────────────────────────────────────
+
+    /** 랜덤하게 다양한 에러/정상 상황을 발생 */
+    public Map<String, Object> chaos() throws Exception {
+        int scenario = ThreadLocalRandom.current().nextInt(12);
+        switch (scenario) {
+            case 0 -> triggerNpe();
+            case 1 -> triggerRuntimeException();
+            case 2 -> triggerClassCast();
+            case 3 -> triggerArrayOob();
+            case 4 -> triggerNumberFormat();
+            case 5 -> triggerIllegalArgument();
+            case 6 -> triggerIllegalState();
+            case 7 -> invalidSql();
+            case 8 -> tableNotFound();
+            case 9 -> { return slowResponse(ThreadLocalRandom.current().nextInt(100, 500)); }
+            case 10 -> triggerUnsupportedOp();
+            default -> { /* 정상 */ }
+        }
+        return Map.of("status", "ok", "scenario", scenario);
     }
 }

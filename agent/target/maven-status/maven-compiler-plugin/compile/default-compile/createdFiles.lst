@@ -62,6 +62,7 @@ com/agent/span/SpanLimits.class
 com/agent/common/DataExporter.class
 com/agent/trace/TracerBuilder.class
 com/agent/metric/K8sMetricsCollector.class
+com/agent/instrumentation/plugin/JdbcPreparedStatementSetterPlugin.class
 com/agent/metric/MetricsCollectorScheduler.class
 com/agent/profiling/ProfilerBackend.class
 com/agent/span/Scope.class
@@ -86,6 +87,7 @@ com/agent/propagation/Propagation.class
 com/agent/span/SpanContext.class
 com/agent/instrumentation/plugin/OkHttpInstrumentationPlugin.class
 com/agent/instrumentation/plugin/JedisInstrumentationPlugin.class
+com/agent/instrumentation/JdbcPreparedStatementSetterAdvice.class
 com/agent/instrumentation/ApacheHttpClientAdvice.class
 com/agent/span/Span.class
 com/agent/instrumentation/plugin/ServletInstrumentationPlugin.class
@@ -118,7 +120,6 @@ com/agent/instrumentation/plugin/ElasticsearchAsyncInstrumentationPlugin.class
 com/agent/config/AgentConfig.class
 com/agent/propagation/TextMapSetter.class
 com/agent/instrumentation/GrpcServerAdvice$State.class
-com/agent/logs/AppLogCollector$AppLogFormatter.class
 com/agent/common/utils/generator/RandomIdGenerator.class
 com/agent/trace/SdkTracerProviderBuilder.class
 com/agent/instrumentation/JdbcStatementAdvice$State.class
@@ -147,6 +148,7 @@ com/agent/logs/SdkLoggerProvider.class
 com/agent/concurrent/ContextPropagatingCallable.class
 com/agent/instrumentation/GrpcServerAdvice.class
 com/agent/instrumentation/HttpRequestExecuteAdvice.class
+com/agent/common/OtlpHttpProtobufSender$PendingPayload.class
 com/agent/logs/sdkLog/ApiUsageLogger.class
 com/agent/instrumentation/RabbitMQAdvice$Producer.class
 com/agent/instrumentation/CompletableFutureSupplierAdvice.class
@@ -206,6 +208,7 @@ com/agent/metric/FileMetricExporter.class
 com/agent/trace/SdkTracerProvider.class
 com/agent/metric/MetricData$ExponentialHistogramPoint.class
 com/agent/metric/Exemplar.class
+com/agent/instrumentation/JdbcParameterCapture.class
 com/agent/instrumentation/plugin/LogbackInstrumentationPlugin.class
 com/agent/trace/NoopTracer.class
 com/agent/logs/TraceLogger.class
