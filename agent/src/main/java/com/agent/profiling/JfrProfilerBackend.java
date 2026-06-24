@@ -112,8 +112,7 @@ final class JfrProfilerBackend implements ProfilerBackend {
         try {
             RecordedThread thread = event.getThread("sampledThread");
             String threadName = thread != null ? thread.getJavaName() : null;
-            if (ThreadSamplingBackend.isAgentThread(threadName)
-                    || isJfrInternalThread(threadName)) return;
+            if (isSkippedThread(threadName)) return;
         } catch (Exception ignored) {}
 
         RecordedStackTrace stackTrace = event.getStackTrace();
@@ -153,10 +152,18 @@ final class JfrProfilerBackend implements ProfilerBackend {
         return sb.toString();
     }
 
-    private boolean isJfrInternalThread(String name) {
-        if (name == null) return false;
-        return name.startsWith("JFR ")
-            || name.startsWith("JFR.")
+    // Inlined from ThreadSamplingBackend.isAgentThread + JFR internals
+    // to avoid cross-class reference causing NoClassDefFoundError in agent classloader.
+    private static boolean isSkippedThread(String name) {
+        if (name == null) return true;
+        return name.startsWith("javi-")
+            || name.startsWith("GC ") || name.startsWith("G1 ")
+            || name.startsWith("Finalizer") || name.startsWith("Reference Handler")
+            || name.startsWith("Signal Dispatcher") || name.startsWith("Attach Listener")
+            || name.startsWith("VM Thread") || name.startsWith("VM Periodic")
+            || name.startsWith("C1 ") || name.startsWith("C2 ")
+            || name.startsWith("Common-Cleaner")
+            || name.startsWith("JFR ") || name.startsWith("JFR.")
             || name.equals("Periodic task thread");
     }
 }

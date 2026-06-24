@@ -1,10 +1,16 @@
 # Java
 *.class
 *.log
+*.log.[0-9]*
+*.lck
 
 # Gradle
 .gradle/
 build/
+
+# Maven
+target/
+dependency-reduced-pom.xml
 
 # IntelliJ
 .idea/

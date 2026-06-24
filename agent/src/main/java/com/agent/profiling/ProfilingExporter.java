@@ -292,9 +292,10 @@ public final class ProfilingExporter {
         String otlpEndpoint = AgentConfig.get().getExporterEndpoint();
         try {
             URI uri = URI.create(otlpEndpoint);
-            return uri.getScheme() + "://" + uri.getHost() + ":8080";
+            int port = uri.getPort();
+            return uri.getScheme() + "://" + uri.getHost() + (port > 0 ? ":" + port : "");
         } catch (Exception e) {
-            return "http://localhost:8080";
+            return "http://localhost:4318";
         }
     }
 
