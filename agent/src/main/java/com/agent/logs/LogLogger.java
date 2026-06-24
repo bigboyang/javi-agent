@@ -32,7 +32,9 @@ public final class LogLogger {
             if (logPath.getParent() != null) {
                 Files.createDirectories(logPath.getParent());
             }
-            FileHandler fileHandler = new FileHandler(logFile, true);
+            int limitBytes = parseInt(get("JAVI_LOG_DATA_FILE_LIMIT_BYTES", "javi.log.data.file.limit.bytes", "52428800"), 52428800);
+            int fileCount = parseInt(get("JAVI_LOG_DATA_FILE_COUNT", "javi.log.data.file.count", "5"), 5);
+            FileHandler fileHandler = new FileHandler(logFile, limitBytes, fileCount, true);
             fileHandler.setFormatter(new LogDataFormatter());
             LOGGER.addHandler(fileHandler);
         } catch (IOException e) {
@@ -52,6 +54,14 @@ public final class LogLogger {
         val = System.getProperty(propKey);
         if (val != null && !val.isEmpty()) return val;
         return defaultValue;
+    }
+
+    private static int parseInt(String value, int defaultValue) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     private static final class LogDataFormatter extends Formatter {
