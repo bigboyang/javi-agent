@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Context;
 import com.agent.span.Scope;
@@ -79,7 +80,7 @@ public final class FeignClientAdvice {
 
         span.setAttribute("http.framework", "feign");
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
-        if (url != null) span.setAttribute("url.full", url);
+        if (url != null) span.setAttribute("url.full", UrlSanitizer.sanitize(url));
         if (path != null) span.setAttribute("url.path", path);
         if (host != null) span.setAttribute("peer.service", host);
 

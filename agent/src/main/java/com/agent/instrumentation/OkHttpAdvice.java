@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Context;
 import com.agent.span.Scope;
@@ -74,7 +75,7 @@ public final class OkHttpAdvice {
 
         span.setAttribute("http.framework", "okhttp");
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
-        if (urlStr != null) span.setAttribute("url.full", urlStr);
+        if (urlStr != null) span.setAttribute("url.full", UrlSanitizer.sanitize(urlStr));
         if (urlPath != null) span.setAttribute("url.path", urlPath);
 
         // host/port — 이미 추출한 httpUrl 재사용
