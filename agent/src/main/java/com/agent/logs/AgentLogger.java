@@ -56,8 +56,10 @@ public final class AgentLogger {
             if (logPath.getParent() != null) {
                 Files.createDirectories(logPath.getParent());
             }
-            // append=true, 단일 파일 (rotate 없음)
-            FileHandler fileHandler = new FileHandler(logFile, true);
+            // append=true, 크기 기반 로테이션 (기본 20MB × 5)
+            int limitBytes = parseInt(get("JAVI_AGENT_LOG_FILE_LIMIT_BYTES", "javi.agent.log.file.limit.bytes", "20971520"), 20971520);
+            int fileCount = parseInt(get("JAVI_AGENT_LOG_FILE_COUNT", "javi.agent.log.file.count", "5"), 5);
+            FileHandler fileHandler = new FileHandler(logFile, limitBytes, fileCount, true);
             fileHandler.setLevel(level);
             fileHandler.setFormatter(new AgentFormatter());
             LOGGER.addHandler(fileHandler);
@@ -106,6 +108,14 @@ public final class AgentLogger {
         val = System.getProperty(propKey);
         if (val != null && !val.isEmpty()) return val;
         return defaultValue;
+    }
+
+    private static int parseInt(String value, int defaultValue) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     /** 단순 텍스트 포맷터: [yyyy-MM-dd HH:mm:ss] [LEVEL] [traceId/spanId] message */

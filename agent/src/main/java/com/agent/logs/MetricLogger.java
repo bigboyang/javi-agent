@@ -54,7 +54,9 @@ public final class MetricLogger {
             if (logPath.getParent() != null) {
                 Files.createDirectories(logPath.getParent());
             }
-            FileHandler fileHandler = new FileHandler(logFile, true);
+            int limitBytes = parseInt(get("JAVI_METRIC_LOG_FILE_LIMIT_BYTES", "javi.metric.log.file.limit.bytes", "20971520"), 20971520);
+            int fileCount = parseInt(get("JAVI_METRIC_LOG_FILE_COUNT", "javi.metric.log.file.count", "5"), 5);
+            FileHandler fileHandler = new FileHandler(logFile, limitBytes, fileCount, true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new MetricFormatter());
             LOGGER.addHandler(fileHandler);

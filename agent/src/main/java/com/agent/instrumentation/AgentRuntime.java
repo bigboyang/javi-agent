@@ -9,6 +9,8 @@ import com.agent.sampler.AdaptiveSampler;
 import com.agent.sampler.Sampler;
 import com.agent.common.JaviSdk;
 import com.agent.common.OtlpHttpProtobufSender;
+import com.agent.logs.CompositeLogExporter;
+import com.agent.logs.FileLogExporter;
 import com.agent.logs.OtlpHttpLogExporter;
 import com.agent.logs.SdkLoggerProvider;
 import com.agent.metric.CompositeMetricExporter;
@@ -43,7 +45,9 @@ public final class AgentRuntime {
         SpanExporter spanExporter = buildSpanExporter(config, spanSender);
 
         SdkLoggerProvider loggerProvider = new SdkLoggerProvider(
-                new OtlpHttpLogExporter(config.getServiceName(), logSender));
+                CompositeLogExporter.of(
+                        new FileLogExporter(),
+                        new OtlpHttpLogExporter(config.getServiceName(), logSender)));
 
         SdkMeterProvider meterProvider = new SdkMeterProvider(
                 CompositeMetricExporter.of(

@@ -1,5 +1,6 @@
 package com.agent.instrumentation;
 
+import com.agent.common.utils.UrlSanitizer;
 import com.agent.logs.AgentLogger;
 import com.agent.span.Scope;
 import com.agent.span.Span;
@@ -85,7 +86,7 @@ public final class WebClientAdvice {
 
         if (httpMethod != null) span.setAttribute("http.request.method", httpMethod);
         if (uriPath != null) span.setAttribute("url.path", uriPath);
-        if (uriStr != null) span.setAttribute("url.full", uriStr);
+        if (uriStr != null) span.setAttribute("url.full", UrlSanitizer.sanitize(uriStr));
         span.setAttribute("http.framework", "spring-webclient");
         if (uriStr != null) {
             try {

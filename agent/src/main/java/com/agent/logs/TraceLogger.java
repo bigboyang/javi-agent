@@ -49,7 +49,9 @@ public final class TraceLogger {
             if (logPath.getParent() != null) {
                 Files.createDirectories(logPath.getParent());
             }
-            FileHandler fileHandler = new FileHandler(logFile, true);
+            int limitBytes = parseInt(get("JAVI_TRACE_LOG_FILE_LIMIT_BYTES", "javi.trace.log.file.limit.bytes", "104857600"), 104857600);
+            int fileCount = parseInt(get("JAVI_TRACE_LOG_FILE_COUNT", "javi.trace.log.file.count", "5"), 5);
+            FileHandler fileHandler = new FileHandler(logFile, limitBytes, fileCount, true);
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new TraceFormatter());
             LOGGER.addHandler(fileHandler);
@@ -113,6 +115,14 @@ public final class TraceLogger {
         val = System.getProperty(propKey);
         if (val != null && !val.isEmpty()) return val;
         return defaultValue;
+    }
+
+    private static int parseInt(String value, int defaultValue) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
     }
 
     /** trace 전용 포맷터: [yyyy-MM-dd HH:mm:ss.SSS] [TRACE] {MDC key=value ...} */
