@@ -19,6 +19,8 @@ javi APM 에이전트. **Java(Maven)** 로 작성된 관측 에이전트로, OTL
 
 > 코딩 컨벤션·주의사항을 여기에 적어두세요. PR로 코드가 바뀌면 이 영역은 GitHub Actions(Claude)가 자동 보강합니다.
 
+- `docs/ARCHITECTURE.md`는 사람 개발자용 온보딩 문서로, PR마다 GitHub Actions(Claude)가 자동 생성/갱신합니다. 직접 수정하지 마세요.
+
 <!-- AUTO-GENERATED:start (스크립트가 관리. 직접 수정 금지) -->
 
 _아래 구간은 스크립트가 자동 생성합니다. 직접 수정하지 마세요._
